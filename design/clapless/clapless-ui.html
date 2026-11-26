@@ -1,0 +1,201 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,800&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>*{box-sizing:border-box;margin:0;padding:0}
+.board{display:flex;flex-direction:column;gap:44px}
+.concept{container-type:inline-size;display:flex;flex-direction:column;gap:14px}
+.concept+.concept{border-top:1px solid var(--border,#3336);padding-top:34px}
+header{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+header b{width:24px;height:24px;border-radius:50%;border:1.5px solid currentColor;display:inline-grid;place-items:center;font-size:12px;align-self:center}
+header h2{font-size:22px;line-height:1.2}
+header p{font-size:13.5px;color:var(--muted-foreground,#999)}
+.brand{display:flex;align-items:center;gap:3.2cqw;border-radius:var(--radius,12px);padding:16px}
+.c1 .brand{background:#F3E9DD;color:#24160F}
+.c2 .brand{background:#EFECE4;color:#0C0C0E}
+.c3 .brand{background:#14213A;color:#F8F6F1}
+.icon{display:block;flex:none;filter:drop-shadow(0 8px 18px #0004)}
+.icon svg{display:block;width:100%;height:100%}
+.icon.xl{width:17cqw;height:17cqw}
+.icon.s{width:44px;height:44px}.icon.xs{width:26px;height:26px}
+.word{flex:1;white-space:nowrap;line-height:1}
+.w1{font:600 9.4cqw 'Fraunces',Georgia,serif;letter-spacing:-.035em}
+.w2{font:800 9.2cqw 'Bricolage Grotesque',sans-serif;letter-spacing:-.05em}.w2 i{font-style:normal;color:#FF4A22}
+.w3{font:800 10cqw 'Gabarito',sans-serif;letter-spacing:-.045em}
+.small{display:flex;gap:10px;align-items:flex-end}
+
+.stage{display:flex;gap:2.2cqw;align-items:stretch}
+.phone{container-type:inline-size;width:27cqw;flex:none}
+.screen{position:relative;width:100cqw;height:208cqw;border-radius:15cqw;overflow:hidden;border:2.2cqw solid #08080a;box-shadow:0 0 0 .8cqw #4a4a50,0 3cqw 6cqw #0005;background:#000;color:#fff}
+.island{position:absolute;top:3cqw;left:50%;translate:-50%;width:27cqw;height:7.6cqw;border-radius:9cqw;background:#000}
+.mac{container-type:inline-size;flex:1;min-width:0;display:flex;align-items:center}
+.mac>div{width:100cqw;height:66cqw;border-radius:2.2cqw;overflow:hidden;box-shadow:0 2cqw 4.5cqw #0006,0 0 0 1px #8884;position:relative}
+.bar{height:5.4cqw;display:flex;align-items:center;gap:1.1cqw;padding:0 2cqw}
+.bar i{width:1.65cqw;height:1.65cqw;border-radius:50%;background:#ff5f57}.bar i:nth-child(2){background:#febc2e}.bar i:nth-child(3){background:#28c840}
+
+.room{position:absolute;inset:0;overflow:hidden}
+.room .person{position:absolute;left:4%;right:4%;bottom:-1%;width:92%;height:78%}
+.room i{position:absolute;display:block}
+.room .win{left:-12%;top:12%;width:42%;height:48%;transform:skewY(9deg);background:repeating-linear-gradient(90deg,transparent 0 28%,#140c08 28% 31%),linear-gradient(#f3dcc0,#a8835f)}
+.room .table{left:20%;right:-10%;top:64%;height:3.2%;transform:rotate(6deg)}
+.room .lamp{right:7%;top:47%;width:17%;height:10%;clip-path:polygon(18% 0,82% 0,100% 100%,0 100%)}
+.amber{background:radial-gradient(circle at 82% 52%,#a9592a 0,transparent 38%),linear-gradient(105deg,#241108,#6a3a22 55%,#35190d)}
+.amber .table{background:#c0682f}.amber .lamp{background:#ffd7a8;box-shadow:0 0 20px #ff9d4d}
+.cine{background:radial-gradient(circle at 80% 50%,#5a2a1c 0,transparent 40%),linear-gradient(105deg,#101013,#2c2625 55%,#121214)}
+.cine .table{background:#5d3a2b}.cine .lamp{background:#ffb48a}.cine .win{background:repeating-linear-gradient(90deg,transparent 0 28%,#0b0b0d 28% 31%),linear-gradient(#aeb6bd,#555c63)}
+.day{background:linear-gradient(105deg,#cdbfab,#ece3d4 55%,#d8cbb8)}
+.day .table{background:#a87c55}.day .lamp{background:#fff3dc}.day .win{background:repeating-linear-gradient(90deg,transparent 0 28%,#6a6459 28% 31%),linear-gradient(#eaf5ff,#b9d3e6)}
+
+.rec{width:19cqw;height:19cqw;border-radius:50%;border:1.3cqw solid #fff;display:grid;place-items:center;flex:none}
+.rec i{width:13.6cqw;height:13.6cqw;border-radius:50%;background:#ff4433}
+.rec.sq i{width:7.4cqw;height:7.4cqw;border-radius:1.4cqw}
+
+/* 1 Mmoho */
+.c1 .screen,.c1 .mac{font-family:'Figtree',sans-serif}
+.p1-top{position:absolute;top:14cqw;left:50%;translate:-50%;white-space:nowrap;font-size:5.4cqw;font-weight:600;padding:2cqw 4cqw;border-radius:9cqw;background:#1a0f0ab8;display:flex;align-items:center;gap:2cqw}
+.p1-top em{width:2.6cqw;height:2.6cqw;border-radius:50%;background:#7ee08a}
+.p1-dock{position:absolute;left:4cqw;right:4cqw;bottom:4cqw;border-radius:10cqw;padding:4cqw 3cqw;background:#1c110bd9;border:1px solid #ffc99a33;display:flex;flex-direction:column;align-items:center;gap:3cqw}
+.p1-dock .meta{display:flex;justify-content:space-between;width:100%;padding:0 3cqw;font-size:5cqw;color:#e9d6c4}
+.p1-dock .rec{border-color:#f6ece0}.p1-dock .rec i{background:linear-gradient(135deg,#ffc183,#de5f1c)}
+.p1-dock .hint{font:500 5.8cqw 'Fraunces',serif;color:#ffc183}
+.m1{background:linear-gradient(#22150e,#140d09);color:#f6ece0}
+.m1 .bar span{margin-left:auto;margin-right:auto;font:600 2.4cqw 'Fraunces',serif;color:#d9c4ae}
+.duo{position:relative;display:flex;gap:1.6cqw;padding:1cqw 2.4cqw 0}
+.duo figure:first-child{width:31cqw;flex:none}.duo figure:nth-child(2){flex:1}
+.tile{position:relative;height:42cqw;border-radius:2cqw;overflow:hidden}
+.tile.wide{background:#f4f0e9;display:grid;place-items:center}
+.ui{width:74%;display:flex;flex-direction:column;gap:2cqw;align-items:flex-start}
+.ui u{display:block;height:2.6cqw;border-radius:1cqw;background:#2a201a22;width:100%}.ui u:first-child{height:5cqw;width:66%;background:#2a201acc}.ui u.btn{width:34%;height:5.4cqw;background:#e66a1f}
+figcaption{font-size:2.05cqw;color:#bfa891;padding-top:1.2cqw}figcaption b{display:block;color:#f6ece0;font:600 2.6cqw 'Fraunces',serif}
+.join{position:absolute;left:34.8cqw;top:32cqw;width:11cqw;height:11cqw;translate:-50%;border-radius:50%;background:#170e09;display:grid;place-items:center;box-shadow:0 0 0 .5cqw #e6762f66,0 1cqw 3cqw #000a}
+.join .rec{width:8cqw;height:8cqw;border:.55cqw solid #f6ece0}.join .rec i{width:5.8cqw;height:5.8cqw;background:linear-gradient(135deg,#ffc183,#de5f1c)}
+.strip{position:absolute;left:2.4cqw;right:2.4cqw;bottom:2cqw;display:flex;align-items:center;gap:2cqw;font-size:2.1cqw}
+.prog{flex:1;height:.8cqw;border-radius:1cqw;background:#fff2;overflow:hidden}.prog i{display:block;height:100%;background:linear-gradient(90deg,#de5f1c,#ffc183)}
+.ok{color:#ffc183;font-weight:600}
+
+/* 2 Clapless */
+.c2 .screen,.c2 .mac{font-family:'IBM Plex Mono',monospace}
+.screen.tally::after{content:"";position:absolute;inset:0;border:1.6cqw solid #ff4a22;border-radius:12.8cqw;pointer-events:none}
+.p2-guides i{position:absolute;width:10cqw;height:10cqw;border:1px solid #efece4cc;border-width:.7cqw 0 0 .7cqw;left:9cqw;top:36cqw}
+.p2-guides i:nth-child(2){left:auto;right:9cqw;rotate:90deg}.p2-guides i:nth-child(3){top:auto;bottom:50cqw;rotate:-90deg}.p2-guides i:nth-child(4){left:auto;right:9cqw;top:auto;bottom:50cqw;rotate:180deg}
+.p2-time{position:absolute;top:15cqw;left:50%;translate:-50%;background:#ff4a22;color:#0c0c0e;font-weight:600;font-size:8.4cqw;padding:1cqw 3cqw;white-space:nowrap}
+.p2-dock{position:absolute;left:0;right:0;bottom:0;height:42cqw;background:#0c0c0ef0;display:flex;align-items:center;justify-content:space-between;padding:0 7cqw;font-size:4.8cqw;line-height:1.35;text-align:center;color:#efece4}
+.p2-dock .rec{border-color:#efece4}
+.m2{background:#0c0c0e;color:#efece4;border-radius:1.2cqw!important}
+.m2 .bar{border-bottom:1px solid #ffffff1c}.m2 .bar span{margin:0 auto;font:800 2.1cqw 'Bricolage Grotesque',sans-serif;letter-spacing:.28em}
+.deck{display:flex;gap:2cqw;padding:2cqw 2.2cqw 0;height:46cqw}
+.mon{position:relative;width:29cqw;flex:none;border:.5cqw solid #ff4a22;overflow:hidden}
+.panel{flex:1;display:flex;flex-direction:column;gap:2.4cqw;min-width:0}
+.tc{font-size:10.4cqw;font-weight:500;letter-spacing:-.05em;line-height:1}
+.tc small{display:block;font-size:2cqw;letter-spacing:.3em;color:#ff4a22;margin-top:1cqw}
+.tracks{position:relative;display:flex;flex-direction:column;gap:1cqw}
+.tracks div{display:flex;align-items:center;gap:1.4cqw;background:#ffffff0d;padding:.8cqw 1.2cqw;height:7.6cqw}
+.tracks label{font-size:1.75cqw;width:10.5cqw;color:#a9a69e}.tracks svg{flex:1;height:100%}.tracks path{fill:none;stroke:#efece4;stroke-width:1.2;vector-effect:non-scaling-stroke}
+.tracks .head{position:absolute;right:7cqw;top:-1cqw;bottom:-1cqw;width:.35cqw;background:#ff4a22}
+.stop{margin-top:auto;background:#ff4a22;color:#0c0c0e;font:800 3.2cqw 'Bricolage Grotesque',sans-serif;display:flex;align-items:center;justify-content:center;gap:1.6cqw;height:8.6cqw}
+.stop i{width:2.8cqw;height:2.8cqw;background:#0c0c0e}
+.takes{position:absolute;left:2.2cqw;right:2.2cqw;bottom:1.4cqw;font-size:2cqw}
+.takes div{display:flex;gap:2.4cqw;align-items:center;border-top:1px solid #ffffff1c;height:5.4cqw}
+.takes span{color:#a9a69e;flex:1}.takes em{font-style:normal;letter-spacing:.18em}.takes em.live{color:#ff4a22}
+
+/* 3 Bona */
+.c3 .screen,.c3 .mac{font-family:'DM Sans',sans-serif}
+.screen.light{background:#FBF9F5;color:#141a22}
+.p3-view{position:absolute;left:4cqw;right:4cqw;top:15cqw;height:140cqw;border-radius:9cqw;overflow:hidden}
+.oval{position:absolute;left:22%;right:22%;top:25%;height:42%;border:.9cqw dashed #fff;border-radius:50%}
+.p3-tip{position:absolute;left:50%;translate:-50%;top:20cqw;white-space:nowrap;background:#2357e8;color:#fff;font-size:5.8cqw;font-weight:600;padding:2.6cqw 4.6cqw;border-radius:9cqw}
+.p3-dock{position:absolute;left:0;right:0;bottom:0;height:46cqw;display:flex;align-items:center;justify-content:space-between;padding:0 6cqw;font-size:5cqw;font-weight:600}
+.p3-dock .rec{border-color:#141a22;width:21cqw;height:21cqw}.p3-dock .rec i{width:15.4cqw;height:15.4cqw;background:#2357e8}
+.m3{background:#FBF9F5;color:#141a22;border-radius:2.8cqw!important}
+.m3 .bar{position:absolute;left:0;top:0;z-index:2}
+.m3 aside{position:absolute;left:0;top:0;bottom:0;width:25cqw;background:#EEEAE1;padding:7cqw 2cqw 2cqw;display:flex;flex-direction:column;gap:1.4cqw}
+.mark{display:flex;align-items:center;gap:1.4cqw;font:800 3.8cqw 'Gabarito',sans-serif;letter-spacing:-.03em}.mark svg{width:5.6cqw;height:5.6cqw;border-radius:1.4cqw;box-shadow:0 0 0 1px #0001}
+.m3 h4{font-size:1.9cqw;color:#7b776d;margin-top:1.6cqw}
+.take{padding:1.4cqw 1.6cqw;border-radius:1.6cqw;font-size:1.9cqw;color:#6d6a61}.take b{display:block;font-size:2.35cqw;color:#141a22}.take.on{background:#fff;box-shadow:0 .5cqw 1.6cqw #0000001a}
+.m3 main{position:absolute;left:25cqw;right:0;top:0;bottom:0;padding:2.2cqw;display:flex;flex-direction:column;gap:2cqw}
+.view{position:relative;flex:1;border-radius:2.4cqw;overflow:hidden}.view .person{left:22%!important;width:56%!important;height:90%!important}
+.coach{position:absolute;left:50%;translate:-50%;bottom:2.4cqw;white-space:nowrap;background:#fff;padding:1.4cqw 2.8cqw;border-radius:5cqw;font-size:2.35cqw;font-weight:600;box-shadow:0 1cqw 2.6cqw #0003}
+.row{display:flex;gap:1.2cqw;align-items:stretch;height:8cqw}
+.chip{background:#EEEAE1;border-radius:1.6cqw;padding:1.1cqw 1.4cqw;font-size:1.75cqw;color:#6d6a61;white-space:nowrap}.chip b{display:block;color:#141a22;font-size:2.1cqw}
+.go{flex:1;background:#2357e8;color:#fff;border-radius:5cqw;display:grid;place-items:center;font:600 2.7cqw 'Gabarito',sans-serif;white-space:nowrap}
+
+@media (max-width:520px){.stage{flex-direction:column;align-items:center}.phone{width:58cqw}.mac{width:100%;container-type:inline-size}.mac>div{height:66cqw}.brand{flex-wrap:wrap}.small{width:100%}}
+
+/* phone framing: keep the face above the controls */
+.c1 .phone .room .person,.c2 .phone .room .person{bottom:21%;height:70%}
+.c1 .phone .room .person path:first-child,.c2 .phone .room .person path:first-child{transform:scaleY(1)}
+.c3 .oval{left:25%;right:25%;top:41%;height:32%}
+
+.wrap{display:flex;flex-direction:column;gap:18px;container-type:inline-size}
+.wrap h3{font-size:13px;font-weight:600;color:var(--muted-foreground,#999)}
+.wrap .screen,.wrap .mac,.states{font-family:'IBM Plex Mono',monospace}
+.p2-ready{position:absolute;top:15cqw;left:50%;translate:-50%;border:.7cqw solid #efece4;padding:1cqw 3cqw;font-size:6.4cqw;font-weight:600;letter-spacing:.14em;color:#efece4}
+.wrap .p2-dock .rec{border-color:#efece4}
+.m2.ready{height:66cqw}.m2.ready .deck{height:58.4cqw}.quietmon{border-color:#ffffff2e!important}
+.m2.ready .tc{font-size:8cqw}.m2.ready .tc small{color:#a9a69e}
+.m2.ready .panel{gap:1.5cqw}
+.audio.ok{color:#efece4;font-weight:500}
+.m2.ready .stop i{border-radius:50%}
+.src{display:flex;align-items:center;gap:1.4cqw;border-top:1px solid #ffffff1c;padding-top:1.3cqw;font-size:2cqw}
+.src label,.audio label{color:#a9a69e;font-size:1.75cqw;width:10.5cqw;flex:none}
+.src b{flex:1;font-weight:500}.src em{font-style:normal;font-size:1.6cqw;letter-spacing:.18em;color:#7ce38b}
+.audio{border:1px solid #ffffff2e;padding:1.3cqw 1.4cqw;display:flex;flex-direction:column;gap:1.2cqw}
+.ahead{display:flex;align-items:center;gap:1.4cqw}.ahead label{width:9cqw}
+.pick{flex:1;display:flex;justify-content:space-between;align-items:center;background:#ffffff12;padding:1cqw 1.4cqw;font-size:2.1cqw;white-space:nowrap}
+.pick s{width:1.1cqw;height:1.1cqw;border:solid #efece4;border-width:0 .3cqw .3cqw 0;rotate:45deg;translate:0 -.3cqw}
+.meter{display:grid;grid-template-columns:repeat(28,1fr);gap:.3cqw;height:2.6cqw}
+.meter i{background:#ffffff17}.meter i.on.ok{background:#7ce38b}.meter i.on.warm{background:#ffc24a}.meter i.on.hot{background:#ff4a22}.meter i.peak{background:#efece4}
+.afoot{display:flex;justify-content:space-between;font-size:1.65cqw;color:#a9a69e}
+.afoot b{display:flex;align-items:center;gap:.9cqw;letter-spacing:.18em;color:#7ce38b}.afoot u{width:1.2cqw;height:1.2cqw;border-radius:50%;background:currentColor}
+.audio.quiet{border-color:#ffc24a88}.audio.quiet .afoot b{color:#ffc24a}
+.audio.gone{border-color:#ff4a2288}.audio.gone .afoot b{color:#ff4a22}
+.m2.ready .stop{height:7.6cqw}
+.solo-mac{width:100%}.solo-mac .m2{height:66cqw}.solo-mac .deck{height:55cqw}.solo-mac .panel{gap:1.8cqw}.solo-mac .tc{font-size:8.6cqw}.solo-mac .tracks div{height:6cqw}.solo-mac .stop{height:7.4cqw}.solo-mac .takes{bottom:.8cqw}
+.states{display:grid;grid-template-columns:1fr 1fr;gap:10px;color:#efece4}
+.states>div{container-type:inline-size;background:#0c0c0e;border-radius:6px;padding:8px}
+.states .audio{padding:3cqw;gap:3cqw}.states .ahead label{width:auto;font-size:3.8cqw}.states .pick{font-size:4.4cqw;padding:2.2cqw 3cqw}.states .pick s{width:2.2cqw;height:2.2cqw;border-width:0 .6cqw .6cqw 0}.states .meter{height:5.4cqw}.states .afoot{font-size:3.6cqw}.states .afoot u{width:2.4cqw;height:2.4cqw}.states .ahead{gap:3cqw}
+.rows{display:flex;gap:2.2cqw}
+.rows .mac{flex:1}
+@media (max-width:520px){.rows{flex-direction:column;align-items:center}.rows .mac{width:100%;flex:none}.states{grid-template-columns:1fr}}
+</style></head><body><div class="wrap c2">
+<h3>Before a take: pick the microphone and watch it move</h3>
+<div class="rows"><div class="phone"><div class="screen"><div class="room cine"><i class="win"></i><i class="table"></i><i class="lamp"></i><svg class="person" viewBox="0 0 200 250" preserveAspectRatio="xMidYMax meet">
+<path d="M8 250 C12 196 52 178 78 172 L122 172 C148 178 188 196 192 250 Z" fill="#111113"/>
+<path d="M82 135 h36 v44 c-8 12 -28 12 -36 0 Z" fill="#6e4231"/>
+<ellipse cx="100" cy="108" rx="39" ry="48" fill="#6e4231"/>
+<path d="M60 88 C60 52 78 40 101 40 C126 40 141 54 141 88 Z" fill="#dcd8cf"/>
+<path d="M58 84 C84 78 126 78 154 90 C132 97 82 96 58 92 Z" fill="#dcd8cf"/>
+<path d="M141 106 C140 134 128 152 110 158" fill="none" stroke="#ff6a3d" stroke-width="2.5" opacity=".7"/>
+</svg></div><div class="island"></div>
+<div class="p2-guides"><i></i><i></i><i></i><i></i></div><div class="p2-ready">READY</div>
+<div class="p2-dock"><span>4K<br>30</span><div class="rec"><i></i></div><span>MAC<br>LINKED</span></div></div></div><div class="mac"><div class="m2 ready"><div class="bar"><i></i><i></i><i></i><span>CLAPLESS</span></div>
+<div class="deck"><div class="mon quietmon"><div class="room cine"><i class="win"></i><i class="table"></i><i class="lamp"></i><svg class="person" viewBox="0 0 200 250" preserveAspectRatio="xMidYMax meet">
+<path d="M8 250 C12 196 52 178 78 172 L122 172 C148 178 188 196 192 250 Z" fill="#111113"/>
+<path d="M82 135 h36 v44 c-8 12 -28 12 -36 0 Z" fill="#6e4231"/>
+<ellipse cx="100" cy="108" rx="39" ry="48" fill="#6e4231"/>
+<path d="M60 88 C60 52 78 40 101 40 C126 40 141 54 141 88 Z" fill="#dcd8cf"/>
+<path d="M58 84 C84 78 126 78 154 90 C132 97 82 96 58 92 Z" fill="#dcd8cf"/>
+<path d="M141 106 C140 134 128 152 110 158" fill="none" stroke="#ff6a3d" stroke-width="2.5" opacity=".7"/>
+</svg></div></div><div class="panel">
+<div class="tc">00:00:00<small>READY</small></div>
+<div class="src"><label>CAMERA</label><b>iPhone 14 · 4K 30</b><em>LINKED</em></div>
+<div class="src"><label>SCREEN</label><b>Built-in display</b><em>READY</em></div>
+<div class="audio ok"><div class="ahead"><label>AUDIO IN</label><div class="pick">Wireless Mic RX<s></s></div></div><div class="meter"><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="warm"></i><i class="warm peak"></i><i class="warm"></i><i class="warm"></i><i class="hot"></i><i class="hot"></i><i class="hot"></i></div><div class="afoot"><b><u></u>CONNECTED</b><span>-14 dB</span></div></div>
+<div class="stop"><i></i>Start take</div></div></div></div></div></div>
+<h3>While recording: the level stays visible</h3>
+<div class="mac solo-mac"><div class="m2"><div class="bar"><i></i><i></i><i></i><span>CLAPLESS</span></div>
+<div class="deck"><div class="mon"><div class="room cine"><i class="win"></i><i class="table"></i><i class="lamp"></i><svg class="person" viewBox="0 0 200 250" preserveAspectRatio="xMidYMax meet">
+<path d="M8 250 C12 196 52 178 78 172 L122 172 C148 178 188 196 192 250 Z" fill="#111113"/>
+<path d="M82 135 h36 v44 c-8 12 -28 12 -36 0 Z" fill="#6e4231"/>
+<ellipse cx="100" cy="108" rx="39" ry="48" fill="#6e4231"/>
+<path d="M60 88 C60 52 78 40 101 40 C126 40 141 54 141 88 Z" fill="#dcd8cf"/>
+<path d="M58 84 C84 78 126 78 154 90 C132 97 82 96 58 92 Z" fill="#dcd8cf"/>
+<path d="M141 106 C140 134 128 152 110 158" fill="none" stroke="#ff6a3d" stroke-width="2.5" opacity=".7"/>
+</svg></div></div><div class="panel">
+<div class="tc">00:04:12<small>RECORDING</small></div>
+<div class="tracks"><div><label>FACE</label><svg viewBox="0 0 200 30" preserveAspectRatio="none"><path d="M0 15 L8 15 L12 4 L16 26 L20 9 L26 21 L32 15 L52 15 L56 6 L61 24 L66 2 L72 28 L78 11 L84 15 L104 15 L110 8 L115 22 L121 15 L140 15 L146 3 L151 27 L157 10 L162 20 L170 15 L200 15"/></svg></div>
+<div><label>SCREEN</label><svg viewBox="0 0 200 30" preserveAspectRatio="none"><path d="M0 15 L8 15 L12 6 L16 24 L20 10 L26 20 L32 15 L52 15 L56 8 L61 22 L66 5 L72 25 L78 12 L84 15 L104 15 L110 10 L115 20 L121 15 L140 15 L146 6 L151 24 L157 11 L162 19 L170 15 L200 15"/></svg></div></div>
+<div class="audio ok"><div class="ahead"><label>AUDIO IN</label><div class="pick">Wireless Mic RX<s></s></div></div><div class="meter"><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok on"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="warm"></i><i class="warm peak"></i><i class="warm"></i><i class="warm"></i><i class="hot"></i><i class="hot"></i><i class="hot"></i></div><div class="afoot"><b><u></u>CONNECTED</b><span>-14 dB</span></div></div>
+<div class="stop"><i></i>Stop take</div></div></div>
+<div class="takes"><div><b>A003</b><span>Recording · sending to Mac</span><em class="live">LIVE</em></div></div></div></div>
+<h3>If something is wrong</h3>
+<div class="states"><div><div class="audio quiet"><div class="ahead"><label>AUDIO IN</label><div class="pick">Wireless Mic RX<s></s></div></div><div class="meter"><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="warm"></i><i class="warm"></i><i class="warm"></i><i class="warm"></i><i class="hot"></i><i class="hot"></i><i class="hot"></i></div><div class="afoot"><b><u></u>NO SOUND</b><span>check the mic is on</span></div></div></div><div><div class="audio gone"><div class="ahead"><label>AUDIO IN</label><div class="pick">Choose a microphone<s></s></div></div><div class="meter"><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="ok"></i><i class="warm"></i><i class="warm"></i><i class="warm"></i><i class="warm"></i><i class="hot"></i><i class="hot"></i><i class="hot"></i></div><div class="afoot"><b><u></u>NOT CONNECTED</b><span>Start is off</span></div></div></div></div>
+</div></body></html>

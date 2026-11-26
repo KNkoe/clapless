@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Drive Clapless on this Mac from the command line.
+
+  clapless status              link, camera, microphone and anything blocking a take
+  clapless start               start a take (returns once the iPhone confirms)
+  clapless stop                stop it (returns once the microphone file is saved)
+  clapless takes               recent takes and how far each transfer is
+  clapless mic NAME            choose the Mac microphone by part of its name
+  clapless lens back|front     choose the iPhone camera
+  clapless speedtest [MB]      measure how fast the iPhone can send to this Mac
+  clapless direct on|off       talk iPhone to Mac directly instead of through the router
+  clapless screen on|off       record the screen with the take, or not
+  clapless sync [TAKE]         match a take's camera to its microphone by sound again
+
+Answers are JSON. Exit status 0 means the app said yes. The app is opened if it is not running.
+"""
+import json, os, socket, subprocess, sys, time
+
+SOCKET = os.path.expanduser("~/Library/Application Support/Clapless/control.sock")
+APP = os.path.expanduser("~/Applications/Clapless.app")
+COMMANDS = {"status", "start", "stop", "takes", "mic", "lens", "speedtest", "direct", "screen", "sync"}
+
+
+def connect():
+    s = socket.socket(socket.AF_UNIX)
+    try:
+        s.connect(SOCKET)
+        return s
+    except OSError:
+        s.close()
+        return None
+
+
+def main(argv):
+    if not argv or argv[0] not in COMMANDS:
+        print(__doc__.strip())
+        return 2
+    s = connect()
+    if s is None:
+        if subprocess.run(["open", "-a", APP]).returncode:
+            print("Clapless is not installed. Run scripts/mac.sh", file=sys.stderr)
+            return 1
+        for _ in range(50):
+            time.sleep(0.2)
+            s = connect()
+            if s:
+                time.sleep(2)  # give it a moment to find the iPhone
+                break
+    if s is None:
+        print("Clapless did not answer.", file=sys.stderr)
+        return 1
+    s.settimeout(120)
+    request = {"cmd": argv[0]}
+    if len(argv) > 1:
+        request["arg"] = " ".join(argv[1:])
+    s.sendall(json.dumps(request).encode() + b"\n")
+    reply = b""
+    while not reply.endswith(b"\n"):
+        piece = s.recv(65536)
+        if not piece:
+            break
+        reply += piece
+    answer = json.loads(reply or b'{"ok": false, "error": "no reply"}')
+    print(json.dumps(answer, indent=2, ensure_ascii=False))
+    return 0 if answer.get("ok") else 1
+
+
+sys.exit(main(sys.argv[1:]))

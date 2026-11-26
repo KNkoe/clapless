@@ -1,0 +1,8 @@
+.DS_Store
+build/
+.build/
+.swiftpm/
+Config/Local.xcconfig
+xcuserdata/
+*.xcuserstate
+__pycache__/
