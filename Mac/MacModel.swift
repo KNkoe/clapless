@@ -27,12 +27,18 @@ final class MacModel: ObservableObject {
     @Published private(set) var screenAllowed = ScreenRecorder.allowed
     @Published private(set) var recordScreen = UserDefaults.standard.object(forKey: "screen.on") as? Bool ?? true
     @Published private(set) var screenID = (UserDefaults.standard.object(forKey: "screen.id") as? Int).map(CGDirectDisplayID.init)
+    @Published private(set) var screenApp = AppChoice.saved
+    @Published private(set) var apps: [ScreenApp] = []
+    @Published private(set) var choosing = false          // asking what to record
+    @Published private(set) var screenNote: String?
     @Published var lensReminded = false
     @Published private(set) var lensThanks = false
     private var previewAges: [(at: Date, age: Double)] = []
     private let screen = ScreenRecorder()
     private lazy var sync = SoundSync(library: library)
     private var screenRunning = false
+    private var recorded: (display: String, app: String?)?     // what this take's screen file shows
+    private var appsCheckedAt = Date.distantPast
     private var phoneAsked = false
     private var phoneStopped: Set<String> = []
     private var freeCheckedAt = Date.distantPast
@@ -81,6 +87,7 @@ final class MacModel: ObservableObject {
             }
         }
         screen.onFailure = { [weak self] why in MainActor.assumeIsolated { self?.message = why } }
+        screen.onNotice = { [weak self] note in MainActor.assumeIsolated { self?.screenNote = note } }
         displays = ScreenRecorder.displays()
         downloader.onProgress = { [weak self] take, value in MainActor.assumeIsolated { self?.progress[take] = value } }
         library.load()
@@ -96,7 +103,21 @@ final class MacModel: ObservableObject {
     // MARK: - What can happen now
 
     /// Why Start is off, or nil when a take can begin.
-    var blocker: String? {
+    var blocker: String? { deviceBlocker ?? screenBlocker }
+
+    /// What is wrong with the screen choice; it can be put right where the choice is made.
+    var screenBlocker: String? {
+        guard recordScreen else { return nil }
+        if !screenAllowed { return "Allow screen recording, or record without the screen" }
+        if let app = screenApp {
+            return NSRunningApplication.runningApplications(withBundleIdentifier: app.id).isEmpty
+                ? "\(app.name) is not open" : nil
+        }
+        return chosenDisplay == nil ? "The chosen screen is not connected" : nil
+    }
+
+    /// What is wrong with the microphone, the iPhone or the disk.
+    var deviceBlocker: String? {
         if mic.accessDenied { return "Allow the microphone in System Settings" }
         if mic.state == .notConnected {
             return mic.selectedID == nil ? "Choose a microphone" : "\(mic.selectedName ?? "The microphone") is not connected"
@@ -110,10 +131,6 @@ final class MacModel: ObservableObject {
         case .finishing: return "The iPhone is saving the last take"
         case .unavailable: return status.note ?? "The iPhone camera is not available"
         }
-        if recordScreen {
-            if !screenAllowed { return "Allow screen recording, or switch the screen off" }
-            if chosenDisplay == nil { return "The chosen screen is not connected" }
-        }
         if let free = macFreeBytes, free < 3_000_000_000 { return "This Mac is nearly full" }
         return nil
     }
@@ -124,14 +141,56 @@ final class MacModel: ObservableObject {
         return displays.first { $0.id == screenID }
     }
 
+    /// What the next take records from the screen, or nil for none or for a screen that has gone.
+    var screenTarget: ScreenTarget? {
+        guard recordScreen else { return nil }
+        if let app = screenApp { return .app(id: app.id, name: app.name) }
+        return chosenDisplay.map { .display($0.id) }
+    }
+
+    var screenName: String {
+        guard recordScreen else { return "Screen off" }
+        return screenApp?.name ?? chosenDisplay?.name ?? "Choose a screen"
+    }
+
+    /// A whole screen, or nothing from the screen.
     func chooseScreen(_ display: ScreenDisplay?) {
         guard phase == .idle else { return }
-        recordScreen = display != nil
-        UserDefaults.standard.set(recordScreen, forKey: "screen.on")
+        setScreen(on: display != nil)
         if let display {
             screenID = display.id
             UserDefaults.standard.set(Int(display.id), forKey: "screen.id")
+            screenApp = nil
+            AppChoice.saved = nil
         }
+    }
+
+    func chooseApp(_ app: ScreenApp) {
+        guard phase == .idle else { return }
+        setScreen(on: true)
+        screenApp = AppChoice(id: app.id, name: app.name)
+        AppChoice.saved = screenApp
+    }
+
+    private func setScreen(on: Bool) {
+        recordScreen = on
+        UserDefaults.standard.set(on, forKey: "screen.on")
+    }
+
+    /// The record button asks what to record first, with the last answer already picked.
+    func askToRecord() {
+        guard phase == .idle else { return }
+        refreshSources()
+        choosing = true
+    }
+
+    func stopAsking() { choosing = false }
+
+    private func refreshSources() {
+        appsCheckedAt = Date()
+        displays = ScreenRecorder.displays()
+        screenAllowed = ScreenRecorder.allowed
+        apps = ScreenRecorder.apps()
     }
 
     /// The first time, macOS shows its own question. After that only System Settings can change it.
@@ -147,6 +206,7 @@ final class MacModel: ObservableObject {
     var warnings: [String] {
         var out: [String] = []
         if let message { out.append(message) }
+        if let screenNote, phase == .recording { out.append(screenNote) }
         if let problem = linkProblem { out.append(problem) }
         if phase == .recording, !linked { out.append("Link to the iPhone lost. It keeps recording and sends the rest later.") }
         if mic.state == .noSound { out.append("No sound from \(mic.selectedName ?? "the microphone"): check it is on") }
@@ -172,7 +232,8 @@ final class MacModel: ObservableObject {
 
     func toggle() {
         switch phase {
-        case .idle: startTake()
+        case .idle:
+            if choosing { startTake() } else { askToRecord() }
         case .starting, .recording: stopTake()
         case .stopping: break
         }
@@ -190,6 +251,8 @@ final class MacModel: ObservableObject {
             return message
         }
         message = nil
+        screenNote = nil
+        choosing = false
         takeID = id
         stopWanted = nil
         phoneAsked = false
@@ -202,16 +265,20 @@ final class MacModel: ObservableObject {
         readClock(id)
         let folder = library.folder(id)
         mic.arm(to: folder.appendingPathComponent("mic.m4a"))
-        let display = recordScreen ? chosenDisplay : nil
-        screenRunning = display != nil
+        let target = screenTarget
+        screenRunning = target != nil
+        recorded = nil
         Task { @MainActor in
             // The screen goes first and stops last, so it covers the whole camera clip, and the
             // microphone file begins at its first picture.
-            if let display {
+            if let target {
                 do {
-                    let first = try await screen.start(display: display.id, to: folder.appendingPathComponent("screen.mp4"))
+                    let started = try await screen.start(target, to: folder.appendingPathComponent("screen.mp4"))
                     guard takeID == id, phase == .starting else { return }
-                    mic.begin(at: first)
+                    var app: String?
+                    if case .app(_, let name) = target { app = name }
+                    recorded = (displays.first { $0.id == started.display }?.name ?? "Screen", app)
+                    mic.begin(at: started.firstFrameHostTime)
                 } catch {
                     screenRunning = false
                     if takeID == id, phase == .starting {
@@ -243,7 +310,7 @@ final class MacModel: ObservableObject {
             client.send(.stopTake)
         }
         readClock(id)
-        let display = screenRunning ? chosenDisplay?.name ?? "Screen" : nil
+        let wasRunning = screenRunning
         let microphone = (name: mic.selectedName ?? "Microphone", id: mic.selectedID ?? "")
         Task { @MainActor in
             // Give the phone a moment to say it has stopped, so the screen outlasts the camera.
@@ -251,10 +318,10 @@ final class MacModel: ObservableObject {
             while phoneAsked, !neverBegan, linked, !phoneStopped.contains(id), Date() < limit {
                 try? await Task.sleep(for: .milliseconds(50))
             }
-            let screenDone = display == nil ? nil : await screen.stop()
+            let screenDone = wasRunning ? await screen.stop() : nil
             screenRunning = false
             let micDone = await mic.endRecording()
-            await save(id, microphone: micDone, device: microphone, screen: screenDone, display: display,
+            await save(id, microphone: micDone, device: microphone, screen: screenDone, source: recorded,
                        problem: problem, neverBegan: neverBegan)
             finishedStopping()
         }
@@ -262,9 +329,11 @@ final class MacModel: ObservableObject {
 
     /// Note down the files this Mac made, with their checksums.
     private func save(_ id: String, microphone: MicMonitor.Recording?, device: (name: String, id: String),
-                      screen: ScreenRecorder.Recording?, display: String?, problem: String?, neverBegan: Bool) async {
+                      screen: ScreenRecorder.Recording?, source: (display: String, app: String?)?, problem: String?,
+                      neverBegan: Bool) async {
         let folder = library.folder(id)
         let library = library
+        let display = source?.display, app = source?.app
         await Task.detached(priority: .userInitiated) {
             func fileFacts(_ name: String) -> (bytes: Int, sha: String)? {
                 let url = folder.appendingPathComponent(name)
@@ -284,7 +353,7 @@ final class MacModel: ObservableObject {
                 screenEntry = TakeRecord.Screen(
                     file: "screen.mp4", bytes: file.bytes, sha256: file.sha, seconds: result.seconds,
                     frames: result.frames, skippedFrames: result.skippedFrames, width: result.width,
-                    height: result.height, fps: ScreenWriter.fps, display: display ?? "Screen",
+                    height: result.height, fps: ScreenWriter.fps, display: display ?? "Screen", app: app,
                     firstFrameHostTime: result.firstFrameHostTime)
             }
             library.update(id) { record in
@@ -413,6 +482,7 @@ final class MacModel: ObservableObject {
 
     private func tick() {
         if phase == .recording { elapsed = Date().timeIntervalSince(startedAt) }
+        if choosing, Date().timeIntervalSince(appsCheckedAt) > 1 { refreshSources() }
         if Date().timeIntervalSince(freeCheckedAt) > 5 {
             freeCheckedAt = Date()
             displays = ScreenRecorder.displays()
@@ -477,10 +547,24 @@ final class MacModel: ObservableObject {
             ok(["selected": device.name])
         case "screen":
             guard phase == .idle else { return no("Not during a take.") }
-            guard let argument, ["on", "off"].contains(argument) else { return no("Use: screen on|off") }
-            if argument == "off" { chooseScreen(nil) }
-            else if let display = chosenDisplay ?? displays.first { chooseScreen(display) }
-            ok()
+            switch argument {
+            case "off": chooseScreen(nil)
+            case "on": setScreen(on: true)
+            case "full":
+                guard let display = chosenDisplay ?? displays.first else { return no("No screen found.") }
+                chooseScreen(display)
+            default:
+                guard let argument, argument.hasPrefix("app ") else { return no("Use: screen on|off|full|app NAME") }
+                let wanted = String(argument.dropFirst(4))
+                let open = ScreenRecorder.apps()
+                guard let app = open.first(where: { $0.name.caseInsensitiveCompare(wanted) == .orderedSame })
+                        ?? open.first(where: { $0.name.localizedCaseInsensitiveContains(wanted) })
+                else { return no("No open app matches. Open: \(open.map(\.name).joined(separator: ", "))") }
+                chooseApp(app)
+            }
+            ok(["recording": screenName])
+        case "apps":
+            ok(["apps": ScreenRecorder.apps().map { ["name": $0.name, "hasWindow": $0.hasWindow] as [String: Any] }])
         case "sync":
             guard let record = argument.flatMap({ id in takes.first { $0.take == id } }) ?? takes.first
             else { return no("No take to match.") }
@@ -556,7 +640,8 @@ final class MacModel: ObservableObject {
                 "selected": orNull(mic.selectedName), "state": "\(mic.state)", "levelDB": Int(mic.bar.rounded()),
                 "available": mic.devices.map(\.name),
             ],
-            "screen": ["on": recordScreen, "allowed": screenAllowed, "display": orNull(chosenDisplay?.name)],
+            "screen": ["on": recordScreen, "allowed": screenAllowed, "display": orNull(chosenDisplay?.name),
+                       "app": orNull(screenApp?.name)],
             "canStart": blocker == nil && phase == .idle, "blocker": orNull(blocker), "warnings": warnings,
         ]
     }
@@ -574,5 +659,22 @@ final class MacModel: ObservableObject {
             out["listed"] = progress.listed
         }
         return out
+    }
+}
+
+/// The one app to record, remembered between launches. Nil means a whole screen.
+struct AppChoice: Equatable {
+    var id: String
+    var name: String
+
+    static var saved: AppChoice? {
+        get {
+            guard let id = UserDefaults.standard.string(forKey: "screen.app") else { return nil }
+            return AppChoice(id: id, name: UserDefaults.standard.string(forKey: "screen.appName") ?? id)
+        }
+        set {
+            UserDefaults.standard.set(newValue?.id, forKey: "screen.app")
+            UserDefaults.standard.set(newValue?.name, forKey: "screen.appName")
+        }
     }
 }

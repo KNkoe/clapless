@@ -51,6 +51,7 @@ struct TakeRecord: Codable, Equatable, Identifiable {
         var height: Int
         var fps: Int
         var display: String
+        var app: String?                  // set when only this app's window was recorded
         var firstFrameHostTime: Double    // Mac clock; mic.m4a begins at the same moment
     }
 

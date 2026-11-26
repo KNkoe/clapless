@@ -186,3 +186,43 @@ final class MacCaptureTests: XCTestCase {
         XCTAssertNil(LightAdvice.warning(iso: nil, shutterSeconds: 0.02))
     }
 }
+
+/// The sums behind recording a single app, with made-up window positions.
+final class AppCropTests: XCTestCase {
+    private let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
+
+    func testASmallPanelInFrontDoesNotTakeOverThePicture() {
+        let panel = CGRect(x: 500, y: 300, width: 420, height: 260)
+        let window = CGRect(x: 100, y: 80, width: 1100, height: 800)
+        let helper = CGRect(x: 0, y: 0, width: 40, height: 20)
+        XCTAssertEqual(AppCrop.main([helper, panel, window]), window)
+        XCTAssertNil(AppCrop.main([helper]))
+    }
+
+    func testTheFrontOneOfTwoSimilarWindowsIsFollowed() {
+        let front = CGRect(x: 600, y: 100, width: 800, height: 700)
+        let behind = CGRect(x: 0, y: 40, width: 1200, height: 900)
+        XCTAssertEqual(AppCrop.main([front, behind]), front)
+    }
+
+    func testTheCropIsMeasuredFromItsOwnScreen() throws {
+        let second = CGRect(x: 1512, y: -100, width: 1920, height: 1080)
+        let window = CGRect(x: 1612, y: 0, width: 900, height: 600)
+        XCTAssertEqual(AppCrop.display(for: window, among: [screen, second]), 1)
+        XCTAssertEqual(AppCrop.source(window: window, display: second),
+                       CGRect(x: 100, y: 100, width: 900, height: 600))
+        // Hanging off the edge: only the part that can be seen.
+        let hanging = CGRect(x: 1200, y: 100, width: 600, height: 500)
+        XCTAssertEqual(AppCrop.source(window: hanging, display: screen), CGRect(x: 1200, y: 100, width: 312, height: 500))
+        XCTAssertNil(AppCrop.display(for: CGRect(x: -900, y: 0, width: 500, height: 400), among: [screen]))
+    }
+
+    func testTheFileSizeIsSharpEvenAndNotTooWide() {
+        let full = AppCrop.pixels(of: screen.size, scale: 2, widest: 3024)
+        XCTAssertEqual([full.width, full.height], [3024, 1964])
+        let window = AppCrop.pixels(of: CGSize(width: 801.5, height: 600.5), scale: 2, widest: 3024)
+        XCTAssertEqual([window.width, window.height], [1602, 1200])
+        let huge = AppCrop.pixels(of: CGSize(width: 2560, height: 1440), scale: 2, widest: 3024)
+        XCTAssertEqual([huge.width, huge.height], [3024, 1700])
+    }
+}

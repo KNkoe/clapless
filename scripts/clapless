@@ -2,7 +2,7 @@
 """Drive Clapless on this Mac from the command line.
 
   clapless status              link, camera, microphone and anything blocking a take
-  clapless start               start a take (returns once the iPhone confirms)
+  clapless start               start a take without asking, with the last screen choice
   clapless stop                stop it (returns once the microphone file is saved)
   clapless takes               recent takes and how far each transfer is
   clapless mic NAME            choose the Mac microphone by part of its name
@@ -10,6 +10,9 @@
   clapless speedtest [MB]      measure how fast the iPhone can send to this Mac
   clapless direct on|off       talk iPhone to Mac directly instead of through the router
   clapless screen on|off       record the screen with the take, or not
+  clapless screen full         record a whole screen
+  clapless screen app NAME     record only that app's window
+  clapless apps                open apps that can be recorded
   clapless sync [TAKE]         match a take's camera to its microphone by sound again
 
 Answers are JSON. Exit status 0 means the app said yes. The app is opened if it is not running.
@@ -18,7 +21,7 @@ import json, os, socket, subprocess, sys, time
 
 SOCKET = os.path.expanduser("~/Library/Application Support/Clapless/control.sock")
 APP = os.path.expanduser("~/Applications/Clapless.app")
-COMMANDS = {"status", "start", "stop", "takes", "mic", "lens", "speedtest", "direct", "screen", "sync"}
+COMMANDS = {"status", "start", "stop", "takes", "mic", "lens", "speedtest", "direct", "screen", "apps", "sync"}
 
 
 def connect():

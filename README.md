@@ -8,8 +8,9 @@ Part of [Reel Studio](https://github.com/KNkoe/reel-studio), which turns the tak
 finished vertical videos.
 
 **State:** early. Camera, screen and microphone takes with verified transfer and sound
-matching have worked on one set-up (an M1 Pro Mac and one iPhone). Editing inside the app is
-not built yet.
+matching have worked on one set-up (an M1 Pro Mac and one iPhone). Recording a single app's
+window is new: it builds and its sums are tested, but it has not been tried in a real take.
+Editing inside the app is not built yet.
 
 ## You need
 
@@ -28,7 +29,8 @@ not built yet.
    same six digits.
 5. The first time, click **Allow** on the screen row, switch Clapless on under Screen Recording,
    then quit and reopen it.
-6. Choose a microphone and a screen, then press the red button.
+6. Choose a microphone, then press the red button. It asks what to record: a whole screen, one
+   app's window, or no screen. The last answer is already picked, so Return starts the take.
 
 Takes are saved in `~/Movies/Clapless/<date_time>/`: `camera.mov`, `screen.mp4`, `mic.m4a`,
 `take.json`. The screen and mic files begin at the same moment; the camera is matched to them
@@ -39,7 +41,7 @@ a take.
 
 ## Command line
 
-`scripts/clapless status | start | stop | takes | mic NAME | lens back|front | speedtest [MB] | direct on|off | screen on|off | sync [TAKE]`
+`scripts/clapless status | start | stop | takes | mic NAME | lens back|front | speedtest [MB] | direct on|off | screen on|off|full|app NAME | apps | sync [TAKE]`
 
 ## Limits
 

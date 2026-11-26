@@ -1,25 +1,15 @@
 import SwiftUI
 
-/// Which screen is recorded, if any.
+/// What is recorded from the screen, if anything. Click to change it.
 struct ScreenInView: View {
     @ObservedObject var model: MacModel
 
     var body: some View {
         HStack(spacing: 8) {
-            Menu {
-                ForEach(model.displays) { display in
-                    Toggle(display.name, isOn: Binding(
-                        get: { model.recordScreen && model.chosenDisplay?.id == display.id },
-                        set: { _ in model.chooseScreen(display) }))
-                }
-                Divider()
-                Toggle("Don't record the screen", isOn: Binding(
-                    get: { !model.recordScreen }, set: { _ in model.chooseScreen(nil) }))
-            } label: {
+            Button { model.askToRecord() } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: model.recordScreen ? "display" : "display.trianglebadge.exclamationmark")
-                        .font(.system(size: 11))
-                    Text(title).font(Brand.font(12.5, 600)).lineLimit(1).truncationMode(.middle)
+                    Image(systemName: symbol).font(.system(size: 11))
+                    Text(model.screenName).font(Brand.font(12.5, 600)).lineLimit(1).truncationMode(.middle)
                     Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(Brand.grey)
                     Spacer(minLength: 0)
                 }
@@ -27,11 +17,10 @@ struct ScreenInView: View {
                 .frame(maxWidth: .infinity, minHeight: 24)
                 .contentShape(Rectangle())
             }
-            .menuStyle(.button)
             .buttonStyle(.plain)
-            .menuIndicator(.hidden)
             .disabled(model.phase != .idle)
-            .accessibilityLabel("Screen: \(title)")
+            .help("Choose a whole screen, one app, or no screen")
+            .accessibilityLabel("Screen: \(model.screenName)")
             if model.recordScreen, !model.screenAllowed {
                 Button("Allow") { model.allowScreen() }
                     .buttonStyle(PressStyle())
@@ -54,18 +43,19 @@ struct ScreenInView: View {
         .background(Brand.bone.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    private var title: String {
-        guard model.recordScreen else { return "Screen off" }
-        return model.chosenDisplay?.name ?? "Choose a screen"
+    private var symbol: String {
+        if !model.recordScreen { return "display.trianglebadge.exclamationmark" }
+        return model.screenApp == nil ? "display" : "macwindow"
     }
 
     private var tag: String {
         if !model.recordScreen { return "Not recorded" }
-        return model.chosenDisplay == nil ? "Not connected" : "Ready"
+        if model.screenBlocker == nil { return "Ready" }
+        return model.screenApp == nil ? "Not connected" : "Not open"
     }
 
     private var colour: Color {
         if !model.recordScreen { return Brand.grey }
-        return model.chosenDisplay == nil ? Brand.red : Brand.green
+        return model.screenBlocker == nil ? Brand.green : Brand.red
     }
 }

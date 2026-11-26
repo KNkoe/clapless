@@ -23,10 +23,12 @@ struct MainView: View {
         .padding(.horizontal, 12)
         .padding(.bottom, 12)
         .background(Brand.ink)
+        .overlay { if model.choosing { RecordChooser(model: model).transition(.opacity) } }
         .overlay { PairingView(model: model) }
         .background(WindowLevel(floating: floating))
         .ignoresSafeArea()
         .animation(.smooth(duration: 0.25), value: featured?.take)
+        .animation(.easeOut(duration: 0.18), value: model.choosing)
     }
 
     /// The take worth showing: one still on its way, otherwise the newest.
@@ -111,7 +113,7 @@ struct MainView: View {
             if recording {
                 Text(model.phase == .stopping ? "Saving" : timecode(model.elapsed)).font(Brand.digits(15, 700))
             } else {
-                Text(model.phase == .starting ? "Starting" : model.blocker == nil ? "Ready" : "Not ready")
+                Text(model.phase == .starting ? "Starting" : model.deviceBlocker == nil ? "Ready" : "Not ready")
                     .font(Brand.font(12, 700))
             }
         }
@@ -145,7 +147,7 @@ struct MainView: View {
 
     private var stateColour: Color {
         if recording { return Brand.ink }
-        return model.phase == .idle && model.blocker == nil ? Brand.green : Brand.amber
+        return model.phase == .idle && model.deviceBlocker == nil ? Brand.green : Brand.amber
     }
 
     @ViewBuilder private var cameraPill: some View {
@@ -228,7 +230,7 @@ struct MainView: View {
 
     private var controls: some View {
         let idle = model.phase == .idle
-        let blocker = idle ? model.blocker : nil
+        let blocker = idle ? model.deviceBlocker : nil
         let off = blocker != nil || model.phase == .stopping
         return VStack(spacing: 6) {
             HStack {
@@ -256,12 +258,16 @@ struct MainView: View {
                 Spacer()
                 phoneInfo
             }
-            Text(blocker ?? (model.recordScreen ? "Records camera, mic and screen" : "Records camera and mic only"))
+            Text(blocker ?? (idle ? "Record asks what to capture" : recordingWhat))
                 .font(Brand.font(11))
                 .foregroundStyle(blocker == nil ? Brand.grey.opacity(0.8) : Brand.amber)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
         }
+    }
+
+    private var recordingWhat: String {
+        model.recordScreen ? "Camera, mic and \(model.screenName)" : "Camera and mic only"
     }
 
     private func side(_ symbol: String, _ label: String) -> some View {
@@ -482,7 +488,8 @@ private struct Waveform: View {
     }
 }
 
-/// Keeps the window above others, so it can sit beside whatever is being shown.
+/// Keeps the window above others, so it can sit beside whatever is being shown, and brings it along
+/// to other desktops, so the stop button stays in reach when recording moves to an app elsewhere.
 private struct WindowLevel: NSViewRepresentable {
     let floating: Bool
 
@@ -490,7 +497,11 @@ private struct WindowLevel: NSViewRepresentable {
 
     func updateNSView(_ view: NSView, context: Context) {
         let level: NSWindow.Level = floating ? .floating : .normal
-        DispatchQueue.main.async { view.window?.level = level }
+        let behaviour: NSWindow.CollectionBehavior = floating ? [.canJoinAllSpaces, .fullScreenAuxiliary] : []
+        DispatchQueue.main.async {
+            view.window?.level = level
+            view.window?.collectionBehavior = behaviour
+        }
     }
 }
 
