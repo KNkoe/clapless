@@ -1,23 +1,29 @@
 import AVFoundation
 import Combine
+import CoreAudio
 
 struct MicDevice: Identifiable, Equatable {
     let id: String
     let name: String
 }
 
-/// The chosen Mac microphone: its live level, and the take's mic.m4a.
-/// It never moves to another microphone by itself.
+/// The Mac microphone: its live level, and the take's mic.m4a. The chosen one is used while it is
+/// there; otherwise the Mac's default stands in, and the window says so.
 final class MicMonitor: NSObject, ObservableObject, AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
     struct Recording {
+        var name: String          // the microphone the take began on
+        var id: String
         var firstSampleHostTime: Double?
         var seconds: Double
         var warnings: [String]
     }
 
     @Published private(set) var devices: [MicDevice] = []
+    /// The microphone picked by the person, remembered. Nil means the Mac's default.
     @Published private(set) var selectedID = UserDefaults.standard.string(forKey: "mic.id")
     @Published private(set) var selectedName = UserDefaults.standard.string(forKey: "mic.name")
+    @Published private(set) var activeID: String?       // the one being listened to
+    @Published private(set) var defaultName: String?
     @Published private(set) var state: MicState = .notConnected
     @Published private(set) var bar = MicLevel.floorDB
     @Published private(set) var peak = MicLevel.floorDB
@@ -37,8 +43,12 @@ final class MicMonitor: NSObject, ObservableObject, AVCaptureAudioDataOutputSamp
     private var level = MicLevel()
     private var lastBufferAt = 0.0
     private var voice = VoiceLevel()
+    private var inTake = false
 
     // mic queue only
+    private var currentOutput: AVCaptureAudioDataOutput?
+    private var activeNameOnQueue = "The microphone"
+    private var takeMic = (name: "Microphone", id: "")
     private var clockSource: AVCaptureSession?     // its clock is what sound buffers are stamped with
     private var writer: MicWriter?
     private var warnings: [String] = []
@@ -56,6 +66,10 @@ final class MicMonitor: NSObject, ObservableObject, AVCaptureAudioDataOutputSamp
             self.stopSession()
             self.refresh()
         })
+        var address = Self.defaultInput
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main) {
+            [weak self] _, _ in self?.refresh()
+        }
         timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in self?.tick() }
         RunLoop.main.add(timer!, forMode: .common)
         Task { @MainActor in
@@ -73,22 +87,79 @@ final class MicMonitor: NSObject, ObservableObject, AVCaptureAudioDataOutputSamp
             .filter { !$0.localizedName.localizedCaseInsensitiveContains("iPhone") }
     }
 
+    private static var defaultInput: AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice,
+                                   mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+    }
+
+    /// The input chosen in System Settings, by the same identifier the capture devices use.
+    private static func systemDefaultID() -> String? {
+        var address = defaultInput
+        var device = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size,
+                                         &device) == noErr, device != 0 else { return nil }
+        address.mSelector = kAudioDevicePropertyDeviceUID
+        var uid: Unmanaged<CFString>?
+        size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &uid) == noErr else { return nil }
+        return uid?.takeRetainedValue() as String?
+    }
+
+    var activeName: String? { devices.first { $0.id == activeID }?.name }
+
+    /// Said whenever the microphone in use is not the one that was picked.
+    var standInNote: String? {
+        guard let selectedID, let activeID, activeID != selectedID, let activeName else { return nil }
+        let wanted = selectedName ?? "Your microphone"
+        let back = devices.contains { $0.id == selectedID }
+        return back ? "\(wanted) is back. Using \(activeName) until the take ends."
+            : "\(wanted) is off. Using \(activeName)."
+    }
+
     func refresh() {
-        let now = Self.found().map { MicDevice(id: $0.uniqueID, name: $0.localizedName) }
+        let before = activeName
+        let found = Self.found()
+        let now = found.map { MicDevice(id: $0.uniqueID, name: $0.localizedName) }
         if now != devices { devices = now }
-        guard let selectedID, devices.contains(where: { $0.id == selectedID }) else {
+        let candidates = found.map {
+            MicChoice.Candidate(id: $0.uniqueID,
+                                builtIn: UInt32(bitPattern: $0.transportType) == kAudioDeviceTransportTypeBuiltIn)
+        }
+        let systemDefault = Self.systemDefaultID()
+        // What "Mac default" would use: the same stand-in applies when the default is an iPhone.
+        let standard = MicChoice.pick(chosen: nil, systemDefault: systemDefault, among: candidates)
+        let standardName = now.first { $0.id == standard }?.name
+        if standardName != defaultName { defaultName = standardName }
+        let recording = lock.withLock { inTake }
+        let next = recording
+            ? MicChoice.pickDuringTake(current: activeID, chosen: selectedID, systemDefault: systemDefault,
+                                       among: candidates)
+            : MicChoice.pick(chosen: selectedID, systemDefault: systemDefault, among: candidates)
+        let moved = next != activeID
+        if moved { activeID = next }
+        guard let next, let name = now.first(where: { $0.id == next })?.name else {
             if session != nil { stopSession() }
             return
         }
-        if allowed, session == nil || runningID != selectedID { startSession(selectedID) }
+        if recording, moved {
+            let note = "\(before ?? "The microphone") disconnected during the take; sound continued on \(name)"
+            takeWarning = note
+            queue.async { [self] in
+                if !warnings.contains(note) { warnings.append(note) }
+            }
+        }
+        queue.async { self.activeNameOnQueue = name }
+        if allowed, session == nil || runningID != next { startSession(next) }
     }
 
-    func select(_ device: MicDevice) {
+    /// Nil picks the Mac's default.
+    func select(_ device: MicDevice?) {
         guard !queue.sync(execute: { writer != nil }) else { return }
-        selectedID = device.id
-        selectedName = device.name
-        UserDefaults.standard.set(device.id, forKey: "mic.id")
-        UserDefaults.standard.set(device.name, forKey: "mic.name")
+        selectedID = device?.id
+        selectedName = device?.name
+        UserDefaults.standard.set(device?.id, forKey: "mic.id")
+        UserDefaults.standard.set(device?.name, forKey: "mic.name")
         stopSession()
         refresh()
     }
@@ -102,6 +173,8 @@ final class MicMonitor: NSObject, ObservableObject, AVCaptureAudioDataOutputSamp
         output.audioSettings = [
             AVFormatIDKey: kAudioFormatLinearPCM, AVLinearPCMBitDepthKey: 32, AVLinearPCMIsFloatKey: true,
             AVLinearPCMIsNonInterleaved: false, AVLinearPCMIsBigEndianKey: false, AVSampleRateKey: 48_000,
+            // Every microphone in one shape, so a take can move from one to another.
+            AVNumberOfChannelsKey: 1,
         ]
         output.setSampleBufferDelegate(self, queue: queue)
         guard session.canAddInput(source), session.canAddOutput(output) else { return }
@@ -115,6 +188,8 @@ final class MicMonitor: NSObject, ObservableObject, AVCaptureAudioDataOutputSamp
         }
         queue.async { [self] in
             clockSource = session
+            currentOutput = output
+            writer?.sourceChanged()
             session.startRunning()
         }
     }
@@ -128,7 +203,7 @@ final class MicMonitor: NSObject, ObservableObject, AVCaptureAudioDataOutputSamp
 
     private func tick() {
         let now = HostClock.now
-        let present = selectedID != nil && devices.contains { $0.id == selectedID } && !accessDenied
+        let present = activeID != nil && devices.contains { $0.id == activeID } && !accessDenied
         let (newState, newBar, newPeak): (MicState, Double, Double) = lock.withLock {
             level.decay(to: now)
             return (present ? level.state(at: now) : .notConnected, level.bar, level.peak)
@@ -143,11 +218,11 @@ final class MicMonitor: NSObject, ObservableObject, AVCaptureAudioDataOutputSamp
         queue.async { [self] in
             guard let writer else { return }
             var warning: String?
-            if !present { warning = "\(selectedNameOnQueue) disconnected during the take" }
+            if !present { warning = "\(activeNameOnQueue) disconnected during the take and no other microphone was found" }
             else if writer.hasWritten, now - lock.withLock({ lastBufferAt }) > 2 {
-                warning = "\(selectedNameOnQueue) stopped sending sound during the take"
+                warning = "\(activeNameOnQueue) stopped sending sound during the take"
             } else if newState == .noSound {
-                warning = "\(selectedNameOnQueue) went silent during the take"
+                warning = "\(activeNameOnQueue) went silent during the take"
             }
             if let warning {
                 if !warnings.contains(warning) { warnings.append(warning) }
@@ -156,19 +231,18 @@ final class MicMonitor: NSObject, ObservableObject, AVCaptureAudioDataOutputSamp
         }
     }
 
-    private var selectedNameOnQueue = "The microphone"
-
     // MARK: - Recording
 
     /// Get ready to write. Sound is held until `begin(at:)` says where the file starts.
     func arm(to url: URL) {
-        let name = selectedName ?? "The microphone"
+        let using = (name: activeName ?? "Microphone", id: activeID ?? "")
         takeWarning = nil
         queue.sync {
-            selectedNameOnQueue = name
+            takeMic = using
             warnings = []
             writer = MicWriter(url: url)
         }
+        lock.withLock { inTake = true }
     }
 
     func begin(at hostTime: Double) {
@@ -176,7 +250,10 @@ final class MicMonitor: NSObject, ObservableObject, AVCaptureAudioDataOutputSamp
     }
 
     func endRecording() async -> Recording? {
-        await withCheckedContinuation { done in
+        lock.withLock { inTake = false }
+        // A chosen microphone that came back during the take is taken up again now.
+        defer { DispatchQueue.main.async { self.refresh() } }
+        return await withCheckedContinuation { done in
             queue.async { [self] in
                 guard let finishing = writer else { return done.resume(returning: nil) }
                 writer = nil
@@ -186,7 +263,8 @@ final class MicMonitor: NSObject, ObservableObject, AVCaptureAudioDataOutputSamp
                     if result == nil {
                         notes.append("mic.m4a was not written: \(finishing.failure ?? "no sound arrived")")
                     }
-                    done.resume(returning: Recording(firstSampleHostTime: result?.firstSampleHostTime,
+                    done.resume(returning: Recording(name: self.takeMic.name, id: self.takeMic.id,
+                                                     firstSampleHostTime: result?.firstSampleHostTime,
                                                      seconds: result?.seconds ?? 0, warnings: notes))
                 }
             }
@@ -194,6 +272,7 @@ final class MicMonitor: NSObject, ObservableObject, AVCaptureAudioDataOutputSamp
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sample: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard output === currentOutput else { return }     // a late buffer from the last microphone
         let now = HostClock.now
         let (loudest, squares, count) = Self.measure(sample)
         let rate = CMSampleBufferGetFormatDescription(sample)

@@ -1,8 +1,8 @@
 import AVFoundation
 import SwiftUI
 
-/// The camera screen from the approved design: the whole recorded frame, corner guides,
-/// READY or the red timecode, a red tally border while recording, and the bottom bar.
+/// The camera screen, drawn like the Mac's window: the whole recorded frame across the full width,
+/// a few ruled tags on it, a red tally border while recording, and a ruled bar underneath.
 struct CameraScreen: View {
     @ObservedObject var model: PhoneModel
     @State private var showMac = false
@@ -10,46 +10,17 @@ struct CameraScreen: View {
     var body: some View {
         GeometryReader { screen in
             let w = screen.size.width / 100          // the design's unit: 1% of the screen width
-            let dock = 38 * w
-            ZStack {
-                Brand.ink.ignoresSafeArea()
-                VStack(spacing: 0) {
-                    ZStack {
-                        // Fitted, never filled: what you see is exactly what is recorded.
-                        CameraPreview(session: model.camera.session, lens: model.lens, state: model.state) {
-                            model.screenMirrored = $0
-                        }
-                        FramingGuides(unit: w).padding(8 * w)
-                        VStack {
-                            Spacer()
-                            if model.state == .ready, !model.recordedYet, model.sending == nil, model.lensNote != .none {
-                                let done = model.lensNote == .wiped
-                                Button { model.dismissLensNote() } label: {
-                                    Label(done ? "Lens wiped" : "Wipe the lens before you start",
-                                          systemImage: done ? "checkmark" : "sparkles")
-                                        .font(Brand.font(3.6 * w, 700))
-                                        .foregroundStyle(Brand.ink)
-                                        .padding(.horizontal, 3.4 * w).padding(.vertical, 2 * w)
-                                        .background(done ? Brand.green : Brand.bone.opacity(0.92), in: Capsule())
-                                }
-                                .buttonStyle(.plain)
-                                .padding(.bottom, 3 * w)
-                                .animation(.snappy(duration: 0.25), value: done)
-                            }
-                            if let sending = model.sending {
-                                SendingChip(sending: sending, linked: model.macName != nil, unit: w)
-                                    .padding(.bottom, 3 * w)
-                                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                            }
-                        }
-                        .animation(.smooth(duration: 0.3), value: model.sending == nil)
-                    }
+            VStack(spacing: 0) {
+                picture(w)
+                    // Fitted, never filled: what you see is exactly what is recorded. The bar gets
+                    // the height that is left, so the picture reaches both sides.
                     .aspectRatio(9 / 16, contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    bar(w).frame(height: dock)
-                }
-                top(w)
+                    .frame(maxWidth: .infinity)
+                    .layoutPriority(1)
+                Rule()
+                bar(w).frame(minHeight: 16 * w, maxHeight: .infinity)
             }
+            .background(Brand.ink.ignoresSafeArea())
             .overlay {
                 if model.state == .recording || model.state == .finishing {
                     RoundedRectangle(cornerRadius: 47, style: .continuous)
@@ -58,6 +29,10 @@ struct CameraScreen: View {
                         .allowsHitTesting(false)
                 }
             }
+        }
+        .simultaneousGesture(TapGesture().onEnded { model.touched() })
+        .overlay {
+            if model.dark || model.resting { QuietScreen(model: model) }
         }
         .overlay { PairingOverlay(model: model) }
         .confirmationDialog(model.pairedName.map { "Paired with \($0)" } ?? "No Mac paired", isPresented: $showMac,
@@ -69,77 +44,168 @@ struct CameraScreen: View {
         }
     }
 
-    private func top(_ w: CGFloat) -> some View {
-        VStack(spacing: 2.4 * w) {
-            switch model.state {
-            case .recording, .finishing:
-                Text(model.state == .finishing ? "SAVING" : timecode(model.seconds))
-                    .font(Brand.digits(8.4 * w, 700))
-                    .foregroundStyle(Brand.ink)
-                    .padding(.horizontal, 3 * w).padding(.vertical, 1 * w)
-                    .background(Brand.red)
-            default:
-                Text(model.state == .ready ? "READY" : model.state == .starting ? "STARTING" : "NOT READY")
-                    .font(Brand.font(6.4 * w, 700))
-                    .tracking(0.9 * w)
-                    .foregroundStyle(Brand.bone)
-                    .padding(.horizontal, 3 * w).padding(.vertical, 1 * w)
-                    .border(Brand.bone, width: 0.7 * w)
-                    .shadow(color: .black.opacity(0.6), radius: 3)
+    private func picture(_ w: CGFloat) -> some View {
+        ZStack {
+            CameraPreview(session: model.camera.session, lens: model.lens, state: model.state) {
+                model.screenMirrored = $0
             }
-            ForEach(([model.problem].compactMap { $0 }) + model.warnings, id: \.self) { text in
-                Text(text)
-                    .font(Brand.font(3.6 * w))
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(Brand.ink)
-                    .padding(.horizontal, 2.4 * w).padding(.vertical, 1.2 * w)
-                    .background(Brand.amber)
-            }
-            Spacer()
+            .opacity(model.dark || model.resting ? 0 : 1)
+            CornerMarks(length: 5 * w)
+                .stroke(Brand.bone.opacity(0.65), lineWidth: 1)
+                .padding(3 * w)
+                .allowsHitTesting(false)
         }
-        .padding(.top, 3 * w)
-        .padding(.horizontal, 6 * w)
+        .overlay(alignment: .topLeading) { top(w).padding(6 * w) }
+        .overlay(alignment: .bottom) {
+            VStack(spacing: 2 * w) {
+                if model.state == .ready, !model.recordedYet, model.sending == nil, model.lensNote != .none {
+                    lensNote(w)
+                }
+                if let sending = model.sending {
+                    SendingRow(sending: sending, linked: model.macName != nil, unit: w)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .padding(6 * w)
+            .animation(.smooth(duration: 0.3), value: model.sending == nil)
+        }
+    }
+
+    private func top(_ w: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 2 * w) {
+            let recording = model.state == .recording || model.state == .finishing
+            HStack(spacing: 2.4 * w) {
+                Rectangle()
+                    .fill(recording ? Brand.ink : model.state == .ready ? Brand.green : Brand.amber)
+                    .frame(width: 2.4 * w, height: 2.4 * w)
+                if recording {
+                    Text(model.state == .finishing ? "SAVING" : timecode(model.seconds))
+                        .font(Brand.digits(7 * w, 700))
+                        .foregroundStyle(Brand.ink)
+                } else {
+                    Caption(text: model.state == .ready ? "Ready" : model.state == .starting ? "Starting" : "Not ready",
+                            size: 4.4 * w, colour: Brand.bone)
+                }
+            }
+            .padding(.horizontal, 3 * w)
+            .frame(height: 10 * w)
+            .background(recording ? Brand.red : Brand.ink.opacity(0.76))
+            .overlay(Rectangle().strokeBorder(recording ? .clear : Brand.rule, lineWidth: 1))
+            ForEach(([model.problem].compactMap { $0 }) + model.warnings, id: \.self) { text in
+                HStack(alignment: .firstTextBaseline, spacing: 2 * w) {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 2.8 * w))
+                        .foregroundStyle(Brand.amber)
+                    Text(text).font(Brand.font(3.6 * w, 600)).foregroundStyle(Brand.bone)
+                }
+                .padding(.horizontal, 3 * w).padding(.vertical, 1.8 * w)
+                .background(Brand.ink.opacity(0.84))
+                .overlay(Rectangle().strokeBorder(Brand.amber.opacity(0.7), lineWidth: 1))
+            }
+        }
+    }
+
+    private func lensNote(_ w: CGFloat) -> some View {
+        let done = model.lensNote == .wiped
+        return Button { model.dismissLensNote() } label: {
+            HStack(spacing: 2.4 * w) {
+                Rectangle().fill(done ? Brand.green : Brand.bone).frame(width: 2 * w, height: 2 * w)
+                Text(done ? "Lens wiped" : "Wipe the lens before you start").font(Brand.font(3.6 * w, 600))
+                Spacer()
+                if !done { Caption(text: "Done", size: 3 * w, colour: Brand.bone) }
+            }
+            .foregroundStyle(Brand.bone)
+            .padding(.horizontal, 3.4 * w)
+            .frame(minHeight: 11 * w)
+            .background(Brand.ink.opacity(0.84))
+            .overlay(Rectangle().strokeBorder(Brand.rule, lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .animation(.snappy(duration: 0.25), value: done)
     }
 
     private func bar(_ w: CGFloat) -> some View {
-        HStack {
+        HStack(spacing: 0) {
             Button {
                 model.choose(model.lens == .back ? .front : .back)
             } label: {
-                VStack(spacing: 0.6 * w) {
-                    Text("4K 30")
-                    Text(model.lens == .back ? "BACK 1×" : "FRONT").foregroundStyle(Brand.grey)
-                }
-                .frame(width: 24 * w, height: 18 * w)
-                .contentShape(Rectangle())
+                cell(w, top: "4K 30", bottom: model.lens == .back ? "Back 1×" : "Front", colour: Brand.grey)
             }
             .disabled(model.state != .ready)
             .accessibilityLabel("Camera: \(model.lens == .back ? "back" : "front"). Tap to switch.")
-            Spacer()
+            Rule(vertical: true)
             RecordButton(unit: w, recording: model.state == .recording) { model.toggleFromPhone() }
                 .disabled(model.state != .ready && model.state != .recording)
                 .opacity(model.state == .ready || model.state == .recording ? 1 : 0.4)
-            Spacer()
+                .frame(width: 30 * w)
+            Rule(vertical: true)
             Button { showMac = true } label: {
-                VStack(spacing: 0.6 * w) {
-                    Text(model.macName != nil ? "MAC" : model.pairedName != nil ? "FINDING" : "NO MAC")
-                    Text(model.macName != nil ? "LINKED" : model.pairedName != nil ? "MAC" : "PAIRED")
-                }
-                .foregroundStyle(model.macName != nil ? Brand.bone : Brand.amber)
-                .frame(width: 24 * w, height: 18 * w)
-                .contentShape(Rectangle())
+                cell(w, top: model.macName != nil ? "Mac" : model.pairedName != nil ? "Finding" : "No Mac",
+                     bottom: model.macName != nil ? "Linked" : model.pairedName != nil ? "Mac" : "Paired",
+                     colour: model.macName != nil ? Brand.green : Brand.amber)
             }
             .disabled(model.state == .recording)
         }
-        .font(Brand.font(4.2 * w))
-        .foregroundStyle(Brand.bone)
         .buttonStyle(.plain)
-        .padding(.horizontal, 6 * w)
+    }
+
+    private func cell(_ w: CGFloat, top: String, bottom: String, colour: Color) -> some View {
+        VStack(spacing: 1.2 * w) {
+            Caption(text: top, size: 3.6 * w, colour: Brand.bone)
+            Caption(text: bottom, size: 3.2 * w, colour: colour)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+    }
+}
+
+/// Black, which costs an OLED screen next to nothing: either the Mac is showing the picture, or
+/// the camera is resting. A tap brings everything back.
+private struct QuietScreen: View {
+    @ObservedObject var model: PhoneModel
+
+    var body: some View {
+        GeometryReader { screen in
+            let w = screen.size.width / 100
+            VStack(spacing: 4 * w) {
+                if model.state == .recording || model.state == .finishing {
+                    HStack(spacing: 2 * w) {
+                        Circle().fill(Brand.red).frame(width: 3 * w, height: 3 * w)
+                        Text(model.state == .finishing ? "SAVING" : timecode(model.seconds))
+                            .font(Brand.digits(7 * w, 700))
+                            .foregroundStyle(Brand.red)
+                    }
+                }
+                Text(model.resting ? "Camera resting" : "Your Mac is showing the picture")
+                    .font(Brand.font(4.6 * w, 700))
+                    .foregroundStyle(Brand.bone.opacity(0.7))
+                if let sending = model.sending {
+                    Text(sending.arrived ? "On your Mac" : "Sending to Mac \(Int(sending.fraction * 100))%")
+                        .font(Brand.digits(4 * w, 700))
+                        .foregroundStyle(sending.arrived ? Brand.green : Brand.bone.opacity(0.7))
+                }
+                ForEach(model.resting ? [] : ([model.problem].compactMap { $0 }) + model.warnings, id: \.self) {
+                    Text($0).font(Brand.font(3.6 * w)).foregroundStyle(Brand.amber)
+                }
+                Text(model.resting ? "No Mac for a while. Tap to wake." : "Tap to see it here")
+                    .font(Brand.font(3.6 * w))
+                    .foregroundStyle(Brand.grey)
+            }
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 8 * w)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(Color.black)
+        .ignoresSafeArea()
+        .contentShape(Rectangle())
+        .onTapGesture { model.touched() }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
     }
 }
 
 /// That the take is on its way, and that the app must stay open until it has arrived.
-private struct SendingChip: View {
+private struct SendingRow: View {
     let sending: PhoneModel.Sending
     let linked: Bool
     let unit: CGFloat
@@ -149,24 +215,24 @@ private struct SendingChip: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1.6 * unit) {
+        VStack(alignment: .leading, spacing: 2 * unit) {
             HStack {
-                Text(title).font(Brand.font(4.2 * unit, 700))
+                Text(title).font(Brand.font(4 * unit, 700))
                 Spacer()
                 if sending.arrived {
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Brand.green)
+                    Image(systemName: "checkmark").foregroundStyle(Brand.green)
                 } else {
-                    Text("\(Int(sending.fraction * 100))%").font(Brand.digits(4.2 * unit, 700))
+                    Text("\(Int(sending.fraction * 100))%").font(Brand.digits(4 * unit, 700))
                 }
             }
             GeometryReader { bar in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Brand.bone.opacity(0.18))
-                    Capsule().fill(sending.arrived ? Brand.green : Brand.bone)
+                    Rectangle().fill(Brand.rule)
+                    Rectangle().fill(sending.arrived ? Brand.green : Brand.bone)
                         .frame(width: bar.size.width * min(1, max(0, sending.fraction)))
                 }
             }
-            .frame(height: 1.4 * unit)
+            .frame(height: 0.8 * unit)
             .animation(.linear(duration: 0.3), value: sending.fraction)
             if !sending.arrived {
                 Text(linked ? "Keep Clapless open until it arrives" : "Waiting for your Mac")
@@ -176,8 +242,8 @@ private struct SendingChip: View {
         }
         .foregroundStyle(Brand.bone)
         .padding(3.4 * unit)
-        .frame(width: 82 * unit)
-        .background(Brand.ink.opacity(0.84), in: RoundedRectangle(cornerRadius: 4 * unit, style: .continuous))
+        .background(Brand.ink.opacity(0.84))
+        .overlay(Rectangle().strokeBorder(Brand.rule, lineWidth: 1))
         .accessibilityElement(children: .combine)
     }
 }
@@ -190,39 +256,18 @@ private struct RecordButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                Circle().strokeBorder(Brand.bone, lineWidth: 1.3 * unit)
-                RoundedRectangle(cornerRadius: recording ? 1.4 * unit : 6.8 * unit)
-                    .fill(Brand.record)
-                    .frame(width: (recording ? 7.4 : 13.6) * unit, height: (recording ? 7.4 : 13.6) * unit)
+                Circle().strokeBorder(Brand.bone, lineWidth: 0.5 * unit)
+                RoundedRectangle(cornerRadius: recording ? 0.8 * unit : 5.8 * unit)
+                    .fill(Brand.red)
+                    .frame(width: (recording ? 6 : 11.6) * unit, height: (recording ? 6 : 11.6) * unit)
             }
-            .frame(width: 19 * unit, height: 19 * unit)
+            .frame(width: 15 * unit, height: 15 * unit)
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .animation(.snappy(duration: 0.22), value: recording)
         .sensoryFeedback(.impact, trigger: recording)
         .accessibilityLabel(recording ? "Stop recording" : "Record the camera")
-    }
-}
-
-private struct FramingGuides: View {
-    let unit: CGFloat
-
-    var body: some View {
-        GeometryReader { area in
-            let side = 10 * unit
-            Path { path in
-                let size = area.size
-                for (x, y, dx, dy) in [(0.0, 0.0, 1.0, 1.0), (size.width, 0, -1, 1),
-                                       (0, size.height, 1, -1), (size.width, size.height, -1, -1)] {
-                    path.move(to: CGPoint(x: x, y: y + dy * side))
-                    path.addLine(to: CGPoint(x: x, y: y))
-                    path.addLine(to: CGPoint(x: x + dx * side, y: y))
-                }
-            }
-            .stroke(Brand.bone.opacity(0.8), lineWidth: 0.7 * unit)
-        }
-        .allowsHitTesting(false)
     }
 }
 

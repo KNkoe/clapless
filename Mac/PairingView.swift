@@ -72,8 +72,8 @@ struct PairingView: View {
             Text(title).font(Brand.font(16, 700)).foregroundStyle(Brand.ink)
                 .frame(maxWidth: .infinity)
                 .frame(height: 44)
-                .background(Brand.red, in: Capsule())
-                .contentShape(Capsule())
+                .background(Brand.red)
+                .contentShape(Rectangle())
         }
         .buttonStyle(PressStyle())
     }

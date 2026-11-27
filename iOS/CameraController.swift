@@ -2,10 +2,12 @@ import AVFoundation
 import CoreImage
 import ImageIO
 
-/// The camera: 4K sensor, upright 2160x3840 frames, 30 fps, ordinary (not HDR, not log) colour.
+/// The camera: 4K sensor, upright 2160x3840 frames, ordinary (not HDR, not log) colour. Takes are
+/// 30 fps; between takes it runs at half that so the phone stays cooler.
 final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
                               AVCaptureAudioDataOutputSampleBufferDelegate {
-    static let fps: Int32 = 30
+    static let fps: Int32 = 30              // every take
+    static let idleFPS: Int32 = 15          // while only framing
     static let sensor = CMVideoDimensions(width: 3840, height: 2160)
     static let mainsHz = 50                 // Lesotho
     static let bitrate = 45_000_000         // to be judged against the Camera app
@@ -51,6 +53,32 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     /// Whether the recorded frames are flipped. They must never be.
     var fileMirrored: Bool? { videoOutput.connection(with: .video)?.isVideoMirrored }
 
+    /// iOS's own view of how stressed the camera system is, with the reasons when it is not at ease.
+    var strain: String? {
+        guard let state = device?.systemPressureState, session.isRunning else { return nil }
+        let level: String
+        switch state.level {
+        case .nominal: level = "nominal"
+        case .fair: level = "fair"
+        case .serious: level = "serious"
+        case .critical: level = "critical"
+        case .shutdown: level = "shutdown"
+        default: level = "unknown"
+        }
+        var reasons: [String] = []
+        if state.factors.contains(.systemTemperature) { reasons.append("phone temperature") }
+        if state.factors.contains(.cameraTemperature) { reasons.append("camera temperature") }
+        if state.factors.contains(.peakPower) { reasons.append("power") }
+        return reasons.isEmpty ? level : "\(level) (\(reasons.joined(separator: ", ")))"
+    }
+
+    /// Frames a second the camera is set to.
+    var framesPerSecond: Int? {
+        guard let duration = device?.activeVideoMinFrameDuration, session.isRunning, duration.seconds > 0
+        else { return nil }
+        return Int((1 / duration.seconds).rounded())
+    }
+
     /// What the camera is using right now.
     var exposure: (iso: Double, seconds: Double)? {
         guard let device, session.isRunning else { return nil }
@@ -68,6 +96,20 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
                 completion(.failure(error))
             }
         }
+    }
+
+    /// Stop the sensor altogether. `start` brings it back.
+    func stop() {
+        sessionQueue.async { [self] in
+            if session.isRunning { session.stopRunning() }
+        }
+    }
+
+    /// The camera must already be locked for configuration.
+    private static func run(_ camera: AVCaptureDevice, at fps: Int32) {
+        let frame = CMTime(value: 1, timescale: fps)
+        camera.activeVideoMinFrameDuration = frame
+        camera.activeVideoMaxFrameDuration = frame
     }
 
     private func configureOutputs() throws {
@@ -120,9 +162,7 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
         defer { camera.unlockForConfiguration() }
         camera.activeFormat = format
         camera.activeColorSpace = .sRGB
-        let frame = CMTime(value: 1, timescale: Self.fps)
-        camera.activeVideoMinFrameDuration = frame
-        camera.activeVideoMaxFrameDuration = frame
+        Self.run(camera, at: Self.idleFPS)
         if format.isVideoHDRSupported {
             camera.automaticallyAdjustsVideoHDREnabled = false
             camera.isVideoHDREnabled = false
@@ -167,10 +207,15 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
         return (pulse, minISO, "Very bright: the take may be over-exposed")
     }
 
-    /// Lock focus, exposure and white balance at what the camera has settled on, then report it.
-    func lockForTake(completion: @escaping (CameraSettings) -> Void) {
+    /// Go to the take's frame rate, then lock focus, exposure and white balance at what the camera
+    /// has settled on and report it. Nil when the camera cannot be set up, so no take is made.
+    func lockForTake(completion: @escaping (CameraSettings?) -> Void) {
         sessionQueue.async { [self] in
-            guard let camera = device else { return completion(settings(note: "no camera", locked: false)) }
+            guard let camera = device, (try? camera.lockForConfiguration()) != nil else { return completion(nil) }
+            Self.run(camera, at: Self.fps)
+            camera.unlockForConfiguration()
+            // The new rate takes a few frames to arrive, and exposure may move with it.
+            Thread.sleep(forTimeInterval: 0.35)
             // Give focus and exposure a moment to finish moving before holding them.
             let deadline = Date().addingTimeInterval(1.5)
             while (camera.isAdjustingFocus || camera.isAdjustingExposure) && Date() < deadline {
@@ -202,9 +247,11 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
         }
     }
 
+    /// After a take: everything automatic again, at the cooler rate.
     func unlock() {
         sessionQueue.async { [self] in
             guard let camera = device, (try? camera.lockForConfiguration()) != nil else { return }
+            Self.run(camera, at: Self.idleFPS)
             Self.makeAutomatic(camera)
             camera.unlockForConfiguration()
         }
@@ -265,7 +312,7 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     /// Several times a second: report the exposure, and look for the lens being wiped.
     private func watch(_ sample: CMSampleBuffer) {
         lensFrames += 1
-        guard lensFrames % 3 == 0 else { return }
+        guard lensFrames % 2 == 0 else { return }
         let now = HostClock.now
         if previewFPS > 0, now - exposureSentAt >= 0.25, let current = exposure {
             exposureSentAt = now

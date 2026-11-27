@@ -19,7 +19,7 @@ final class MacCaptureTests: XCTestCase {
     }
 
     /// 1024 samples of float sound starting at `hostTime`, stamped on a session clock offset from it.
-    private func sound(_ hostTime: Double, frames: Int = 1024) throws -> CMSampleBuffer {
+    private func sound(_ hostTime: Double, frames: Int = 1024, clockBehind: Double = 1_000) throws -> CMSampleBuffer {
         var description = AudioStreamBasicDescription(
             mSampleRate: 48_000, mFormatID: kAudioFormatLinearPCM,
             mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
@@ -43,7 +43,7 @@ final class MacCaptureTests: XCTestCase {
         var sample: CMSampleBuffer?
         CMAudioSampleBufferCreateReadyWithPacketDescriptions(
             allocator: nil, dataBuffer: block!, formatDescription: format!, sampleCount: frames,
-            presentationTimeStamp: CMTime(seconds: hostTime - 1_000, preferredTimescale: 48_000),
+            presentationTimeStamp: CMTime(seconds: hostTime - clockBehind, preferredTimescale: 48_000),
             packetDescriptions: nil, sampleBufferOut: &sample)
         return try XCTUnwrap(sample)
     }
@@ -103,6 +103,79 @@ final class MacCaptureTests: XCTestCase {
         let values = raw.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
         let beep = try XCTUnwrap(values.firstIndex { abs($0) > 0.15 })
         XCTAssertEqual(Double(beep) / 48_000, Self.event - Self.start, accuracy: 0.003, "the voice is shifted in mic.m4a")
+    }
+
+    func testSoundStaysInPlaceWhenAnotherMicrophoneTakesOverAfterAGap() async throws {
+        try await checkJoin(secondMicStarts: Self.start + 2.6)
+    }
+
+    func testSoundStaysInPlaceWhenTheNextMicrophoneOverlapsTheLast() async throws {
+        try await checkJoin(secondMicStarts: Self.start + 1.7)
+    }
+
+    /// Two seconds from one microphone, then another with its own clock, which hears the beep.
+    private func checkJoin(secondMicStarts: Double) async throws {
+        let url = root.appendingPathComponent("mic.m4a")
+        let writer = MicWriter(url: url)
+        writer.begin(at: Self.start)
+        let step = 1024.0 / 48_000
+        for time in stride(from: Self.start, to: Self.start + 2, by: step) {
+            writer.append(try sound(time), hostTime: time)
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        writer.sourceChanged()
+        for time in stride(from: secondMicStarts, to: Self.start + 6, by: step) {
+            writer.append(try sound(time, clockBehind: 31_000), hostTime: time)
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        let result: MicWriter.Result? = await withCheckedContinuation { done in writer.finish { done.resume(returning: $0) } }
+        let saved = try XCTUnwrap(result, writer.failure ?? "nothing written")
+        XCTAssertNil(writer.failure)
+        XCTAssertEqual(saved.seconds, 6, accuracy: 0.05)
+        XCTAssertEqual(writer.droppedBuffers, 0)
+        let raw = try ffmpeg(["-i", url.path, "-af", "aresample=48000:async=1:first_pts=0", "-ac", "1", "-f", "f32le", "-"])
+        let values = raw.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+        XCTAssertEqual(Double(values.count) / 48_000, 6, accuracy: 0.08)
+        let beep = try XCTUnwrap(values.firstIndex { abs($0) > 0.15 })
+        XCTAssertEqual(Double(beep) / 48_000, Self.event - Self.start, accuracy: 0.003, "the join shifted the sound")
+    }
+
+    func testTheChosenMicrophoneIsUsedAndTheMacDefaultStandsIn() {
+        let builtIn = MicChoice.Candidate(id: "mac", builtIn: true)
+        let wireless = MicChoice.Candidate(id: "wireless", builtIn: false)
+        let usb = MicChoice.Candidate(id: "usb", builtIn: false)
+        let all = [usb, builtIn, wireless]
+        XCTAssertEqual(MicChoice.pick(chosen: "wireless", systemDefault: "usb", among: all), "wireless")
+        XCTAssertEqual(MicChoice.pick(chosen: "wireless", systemDefault: "usb", among: [usb, builtIn]), "usb")
+        XCTAssertEqual(MicChoice.pick(chosen: nil, systemDefault: "usb", among: all), "usb")
+        // The default is something never offered, such as an iPhone.
+        XCTAssertEqual(MicChoice.pick(chosen: "wireless", systemDefault: "iphone", among: [usb, builtIn]), "mac")
+        XCTAssertEqual(MicChoice.pick(chosen: nil, systemDefault: nil, among: [usb]), "usb")
+        XCTAssertNil(MicChoice.pick(chosen: "wireless", systemDefault: nil, among: []))
+    }
+
+    func testATakeDoesNotMoveBackToAMicrophoneThatReturns() {
+        let builtIn = MicChoice.Candidate(id: "mac", builtIn: true)
+        let wireless = MicChoice.Candidate(id: "wireless", builtIn: false)
+        XCTAssertEqual(MicChoice.pickDuringTake(current: "mac", chosen: "wireless", systemDefault: "wireless",
+                                                among: [builtIn, wireless]), "mac")
+        XCTAssertEqual(MicChoice.pickDuringTake(current: "wireless", chosen: "wireless", systemDefault: "mac",
+                                                among: [builtIn]), "mac")
+    }
+
+    func testTheWorstHeatOfATakeIsKept() {
+        func status(_ heat: Heat, _ strain: String, _ processor: Double) -> PhoneStatus {
+            PhoneStatus(name: "p", model: "iPhone", state: .recording, seconds: 0, lens: .back, freeBytes: 1,
+                        bytesPerSecond: 1, battery: 1, charging: false, heat: heat, droppedFrames: 0,
+                        processor: processor, cameraStrain: strain)
+        }
+        var log = TakeRecord.PhoneHeat(status(.fair, "nominal", 10))
+        log.add(status(.serious, "serious (phone temperature)", 20))
+        log.add(status(.fair, "fair (power)", 30))
+        XCTAssertEqual(log.atStart, .fair)
+        XCTAssertEqual(log.worst, .serious)
+        XCTAssertEqual(log.worstCameraStrain, "serious (phone temperature)")
+        XCTAssertEqual(try XCTUnwrap(log.averageProcessorPercent), 20, accuracy: 0.001)
     }
 
     func testTheScreenFileIsSteadyAndChangesAtTheRightFrame() async throws {

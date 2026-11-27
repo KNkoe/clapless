@@ -37,6 +37,7 @@ final class MacModel: ObservableObject {
     private let screen = ScreenRecorder()
     private lazy var sync = SoundSync(library: library)
     private var screenRunning = false
+    private var phoneHeat: TakeRecord.PhoneHeat?
     private var recorded: (display: String, app: String?)?     // what this take's screen file shows
     private var appsCheckedAt = Date.distantPast
     private var phoneAsked = false
@@ -119,9 +120,7 @@ final class MacModel: ObservableObject {
     /// What is wrong with the microphone, the iPhone or the disk.
     var deviceBlocker: String? {
         if mic.accessDenied { return "Allow the microphone in System Settings" }
-        if mic.state == .notConnected {
-            return mic.selectedID == nil ? "Choose a microphone" : "\(mic.selectedName ?? "The microphone") is not connected"
-        }
+        if mic.state == .notConnected { return "No microphone found" }
         if pairedName == nil { return "Pair your iPhone first" }
         guard linked, let status else { return "Open Clapless on your iPhone" }
         switch status.state {
@@ -209,9 +208,9 @@ final class MacModel: ObservableObject {
         if let screenNote, phase == .recording { out.append(screenNote) }
         if let problem = linkProblem { out.append(problem) }
         if phase == .recording, !linked { out.append("Link to the iPhone lost. It keeps recording and sends the rest later.") }
-        if mic.state == .noSound { out.append("No sound from \(mic.selectedName ?? "the microphone"): check it is on") }
+        if mic.state == .noSound { out.append("No sound from \(mic.activeName ?? "the microphone"): check it is on") }
         if let warning = mic.takeWarning { out.append(warning) }
-        if mic.voiceQuiet { out.append("Voice is quiet on \(mic.selectedName ?? "this mic"): move closer") }
+        if mic.voiceQuiet { out.append("Voice is quiet on \(mic.activeName ?? "this mic"): move closer") }
         if linked, let status {
             out += status.warnings
             if let note = status.note { out.append(note) }
@@ -256,6 +255,7 @@ final class MacModel: ObservableObject {
         takeID = id
         stopWanted = nil
         phoneAsked = false
+        phoneHeat = nil
         lensReminded = true
         faceHistory = []
         elapsed = 0
@@ -311,7 +311,6 @@ final class MacModel: ObservableObject {
         }
         readClock(id)
         let wasRunning = screenRunning
-        let microphone = (name: mic.selectedName ?? "Microphone", id: mic.selectedID ?? "")
         Task { @MainActor in
             // Give the phone a moment to say it has stopped, so the screen outlasts the camera.
             let limit = Date().addingTimeInterval(3)
@@ -321,19 +320,20 @@ final class MacModel: ObservableObject {
             let screenDone = wasRunning ? await screen.stop() : nil
             screenRunning = false
             let micDone = await mic.endRecording()
-            await save(id, microphone: micDone, device: microphone, screen: screenDone, source: recorded,
+            await save(id, microphone: micDone, screen: screenDone, source: recorded,
                        problem: problem, neverBegan: neverBegan)
             finishedStopping()
         }
     }
 
     /// Note down the files this Mac made, with their checksums.
-    private func save(_ id: String, microphone: MicMonitor.Recording?, device: (name: String, id: String),
+    private func save(_ id: String, microphone: MicMonitor.Recording?,
                       screen: ScreenRecorder.Recording?, source: (display: String, app: String?)?, problem: String?,
                       neverBegan: Bool) async {
         let folder = library.folder(id)
         let library = library
         let display = source?.display, app = source?.app
+        let heat = phoneHeat
         await Task.detached(priority: .userInitiated) {
             func fileFacts(_ name: String) -> (bytes: Int, sha: String)? {
                 let url = folder.appendingPathComponent(name)
@@ -344,7 +344,7 @@ final class MacModel: ObservableObject {
             }
             var micEntry: TakeRecord.Mic?
             if let microphone, microphone.seconds > 0, let file = fileFacts("mic.m4a") {
-                micEntry = TakeRecord.Mic(file: "mic.m4a", name: device.name, id: device.id, bytes: file.bytes,
+                micEntry = TakeRecord.Mic(file: "mic.m4a", name: microphone.name, id: microphone.id, bytes: file.bytes,
                                           sha256: file.sha, seconds: microphone.seconds,
                                           firstSampleHostTime: microphone.firstSampleHostTime)
             }
@@ -359,6 +359,10 @@ final class MacModel: ObservableObject {
             library.update(id) { record in
                 record.mic = micEntry
                 record.screen = screenEntry
+                record.phoneHeat = heat
+                if let heat, heat.worst.rank >= Heat.serious.rank {
+                    record.warn("The iPhone got hot during this take (\(heat.worst.rawValue))")
+                }
                 if !neverBegan { (microphone?.warnings ?? []).forEach { record.warn($0) } }
                 screen?.warnings.forEach { record.warn($0) }
                 if let problem { record.warn(problem) }
@@ -442,6 +446,9 @@ final class MacModel: ObservableObject {
                 if new.state == .ready, phase == .idle { stopWanted = nil }
             }
             if let id = takeID {
+                if new.state == .recording, new.takeID == id {
+                    if phoneHeat == nil { phoneHeat = TakeRecord.PhoneHeat(new) } else { phoneHeat?.add(new) }
+                }
                 if phase == .starting, new.state == .recording, new.takeID == id { began() }
                 // Ready again with no take, well after recording began: the phone ended it while out of touch.
                 if phase == .recording, new.state == .ready, Date().timeIntervalSince(startedAt) > 4 {
@@ -539,10 +546,14 @@ final class MacModel: ObservableObject {
         case "takes":
             ok(["takes": takes.prefix(20).map { describe($0) }])
         case "mic":
+            guard phase == .idle else { return no("Not during a take.") }
+            if argument?.lowercased() == "default" {
+                mic.select(nil)
+                return ok(["selected": "Mac default", "using": orNull(mic.activeName)])
+            }
             guard let argument, let device = mic.devices.first(where: {
                 $0.name.localizedCaseInsensitiveContains(argument)
             }) else { return no("No microphone matches. Found: \(mic.devices.map(\.name).joined(separator: ", "))") }
-            guard phase == .idle else { return no("Not during a take.") }
             mic.select(device)
             ok(["selected": device.name])
         case "screen":
@@ -614,6 +625,10 @@ final class MacModel: ObservableObject {
             phone["charging"] = status.charging
             phone["heat"] = status.heat.rawValue
             phone["droppedFrames"] = status.droppedFrames
+            phone["processorPercent"] = status.processor.map { Int($0.rounded()) as Any } ?? NSNull()
+            phone["appProcessorPercent"] = status.appProcessor.map { Int($0.rounded()) as Any } ?? NSNull()
+            phone["cameraStrain"] = orNull(status.cameraStrain)
+            phone["cameraFPS"] = status.cameraFPS.map { $0 as Any } ?? NSNull()
         }
         if let quality { phone["roundTripMs"] = Int(quality.roundTripMs) }
         if linked, let route { phone["route"] = route }
@@ -637,7 +652,8 @@ final class MacModel: ObservableObject {
         return [
             "phase": phase.rawValue, "take": orNull(takeID), "seconds": Int(elapsed), "iphone": phone,
             "microphone": [
-                "selected": orNull(mic.selectedName), "state": "\(mic.state)", "levelDB": Int(mic.bar.rounded()),
+                "selected": mic.selectedName ?? "Mac default", "using": orNull(mic.activeName),
+                "note": orNull(mic.standInNote), "state": "\(mic.state)", "levelDB": Int(mic.bar.rounded()),
                 "available": mic.devices.map(\.name),
             ],
             "screen": ["on": recordScreen, "allowed": screenAllowed, "display": orNull(chosenDisplay?.name),

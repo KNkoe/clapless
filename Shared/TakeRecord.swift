@@ -73,6 +73,40 @@ struct TakeRecord: Codable, Equatable, Identifiable {
         var note: String?
     }
 
+    /// How warm the iPhone got while it was recording, as the phone reported it once a second.
+    struct PhoneHeat: Codable, Equatable {
+        var atStart: Heat
+        var worst: Heat
+        var worstCameraStrain: String?
+        var averageProcessorPercent: Double?
+        var readings = 1
+
+        init(_ status: PhoneStatus) {
+            atStart = status.heat
+            worst = status.heat
+            worstCameraStrain = status.cameraStrain
+            averageProcessorPercent = status.processor
+        }
+
+        mutating func add(_ status: PhoneStatus) {
+            if status.heat.rank > worst.rank { worst = status.heat }
+            if Self.rank(status.cameraStrain) > Self.rank(worstCameraStrain) {
+                worstCameraStrain = status.cameraStrain
+            }
+            if let new = status.processor {
+                let old = averageProcessorPercent ?? new
+                averageProcessorPercent = old + (new - old) / Double(readings + 1)
+            }
+            readings += 1
+        }
+
+        /// The strain reads "serious (phone temperature)": the first word is the level.
+        private static func rank(_ strain: String?) -> Int {
+            let levels = ["nominal", "fair", "serious", "critical", "shutdown"]
+            return strain.flatMap { levels.firstIndex(of: String($0.prefix { $0 != " " })) } ?? -1
+        }
+    }
+
     var app = "Clapless"
     var version = 1
     var take: String
@@ -83,6 +117,7 @@ struct TakeRecord: Codable, Equatable, Identifiable {
     var screen: Screen?
     var clock: [ClockReading] = []
     var sync: Sync?
+    var phoneHeat: PhoneHeat?
     var warnings: [String] = []
 
     var id: String { take }

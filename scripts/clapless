@@ -6,6 +6,7 @@
   clapless stop                stop it (returns once the microphone file is saved)
   clapless takes               recent takes and how far each transfer is
   clapless mic NAME            choose the Mac microphone by part of its name
+  clapless mic default         follow the input chosen in System Settings
   clapless lens back|front     choose the iPhone camera
   clapless speedtest [MB]      measure how fast the iPhone can send to this Mac
   clapless direct on|off       talk iPhone to Mac directly instead of through the router

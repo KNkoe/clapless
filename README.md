@@ -29,7 +29,9 @@ Editing inside the app is not built yet.
    same six digits.
 5. The first time, click **Allow** on the screen row, switch Clapless on under Screen Recording,
    then quit and reopen it.
-6. Choose a microphone, then press the red button. It asks what to record: a whole screen, one
+6. Pick a microphone, or leave it on **Mac default**, which follows System Settings. If the one
+   you picked is off, the Mac's default stands in and the window says so; if a microphone drops
+   during a take, the sound carries on from the next one. Then press the red button. It asks what to record: a whole screen, one
    app's window, or no screen. The last answer is already picked, so Return starts the take.
 
 Takes are saved in `~/Movies/Clapless/<date_time>/`: `camera.mov`, `screen.mp4`, `mic.m4a`,
@@ -41,7 +43,14 @@ a take.
 
 ## Command line
 
-`scripts/clapless status | start | stop | takes | mic NAME | lens back|front | speedtest [MB] | direct on|off | screen on|off|full|app NAME | apps | sync [TAKE]`
+`scripts/clapless status | start | stop | takes | mic NAME|default | lens back|front | speedtest [MB] | direct on|off | screen on|off|full|app NAME | apps | sync [TAKE]`
+
+## Heat
+
+Between takes the iPhone's camera runs at 15 frames a second (takes are 30). With a Mac
+connected the phone's screen goes black after 20 seconds; tap it to see the picture. After
+three minutes with no Mac and no touch the camera switches off and the phone may lock as usual.
+Each `take.json` notes how warm the iPhone got.
 
 ## Limits
 

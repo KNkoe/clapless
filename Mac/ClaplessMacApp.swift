@@ -9,14 +9,15 @@ struct ClaplessMacApp: App {
         Window("Clapless", id: "studio") {
             MainView(model: delegate.model, mic: delegate.model.mic)
                 .preferredColorScheme(.dark)
-                .frame(minWidth: 300, minHeight: 620)
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 340, height: 780)
+        .defaultSize(MainView.design)
         // Portrait, at the right-hand edge, where it can sit beside whatever is being shown.
         .defaultWindowPlacement { _, context in
             let screen = context.defaultDisplay.visibleRect
-            let size = CGSize(width: 340, height: min(780, screen.height - 24))
+            let design = MainView.design
+            let width = min(design.width, (screen.height - 24) * design.width / design.height)
+            let size = CGSize(width: width, height: width * design.height / design.width)
             return WindowPlacement(CGPoint(x: screen.maxX - size.width - 12, y: screen.minY + 12), size: size)
         }
         .commands {

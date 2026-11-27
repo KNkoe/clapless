@@ -16,6 +16,11 @@ final class PhoneModel: ObservableObject {
     @Published private(set) var sending: Sending?
     @Published private(set) var recordedYet = false
     @Published private(set) var lensNote = LensNote.remind
+    @Published private(set) var dark = false       // blacked out while the Mac shows the picture
+    @Published private(set) var resting = false    // camera off after a while with no Mac
+    private var touchedAt = Date()
+    private var aloneSince = Date()
+    private var space: (bytes: Int64, at: Date)?
 
     enum LensNote { case remind, wiped, none }
     private var lensWiped = false
@@ -33,12 +38,15 @@ final class PhoneModel: ObservableObject {
     private let takes: URL
     private var recorder: TakeRecorder?
     private var timer: Timer?
+    private var load = LoadMeter()
     private var observers: [NSObjectProtocol] = []
     private var active = false
     private var background = UIBackgroundTaskIdentifier.invalid
 
     private static let spaceToStart: Int64 = 1_000_000_000
     private static let spaceToStop: Int64 = 300_000_000
+    private static let darkAfter = 20.0       // seconds without a touch, with a Mac connected
+    private static let restAfter = 180.0      // seconds with neither a Mac nor a touch
 
     init() {
         takes = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -50,6 +58,8 @@ final class PhoneModel: ObservableObject {
         link.onMac = { [weak self] name in
             MainActor.assumeIsolated {
                 self?.macName = name
+                self?.aloneSince = Date()
+                if name != nil { self?.wake() } else { self?.dark = false }
                 self?.updatePreviewRate()
                 self?.tick()
             }
@@ -87,31 +97,12 @@ final class PhoneModel: ObservableObject {
         guard !active || state == .unavailable else { return }
         let first = !active
         active = true
+        resting = false
+        touched()
+        aloneSince = Date()
         UIApplication.shared.isIdleTimerDisabled = true
         state = recorder == nil ? .starting : state
-        Task { [self] in
-            guard await AVCaptureDevice.requestAccess(for: .video) else {
-                state = .unavailable
-                problem = "Camera access is off. Turn it on in Settings > Apps > Clapless."
-                return
-            }
-            if await !AVCaptureDevice.requestAccess(for: .audio) {
-                problem = "Microphone access is off, so takes cannot be lined up by sound."
-            }
-            camera.start(lens: lens) { [weak self] result in
-                Task { @MainActor in
-                    guard let self else { return }
-                    switch result {
-                    case .success:
-                        if self.recorder == nil { self.state = .ready }
-                    case .failure(let error):
-                        self.state = .unavailable
-                        self.problem = error.localizedDescription
-                    }
-                    self.updatePreviewRate()
-                }
-            }
-        }
+        startCamera()
         if first {
             lensWiped = false
             lensNote = .remind
@@ -125,6 +116,68 @@ final class PhoneModel: ObservableObject {
                 MainActor.assumeIsolated { self?.tick() }
             }
         }
+    }
+
+    private func startCamera() {
+        Task { [self] in
+            guard await AVCaptureDevice.requestAccess(for: .video) else {
+                state = .unavailable
+                problem = "Camera access is off. Turn it on in Settings > Apps > Clapless."
+                return
+            }
+            if await !AVCaptureDevice.requestAccess(for: .audio) {
+                problem = "Microphone access is off, so takes cannot be lined up by sound."
+            }
+            camera.start(lens: lens) { [weak self] result in
+                Task { @MainActor in
+                    guard let self, !self.resting else { return }
+                    switch result {
+                    case .success:
+                        if self.recorder == nil { self.state = .ready }
+                    case .failure(let error):
+                        self.state = .unavailable
+                        self.problem = error.localizedDescription
+                    }
+                    self.updatePreviewRate()
+                }
+            }
+        }
+    }
+
+    // MARK: - Staying cool
+
+    /// Any tap: light the screen again, and bring the camera back if it was resting.
+    func touched() {
+        touchedAt = Date()
+        dark = false
+        wake()
+    }
+
+    /// With no Mac and nobody touching it, the camera goes off and the phone may lock as usual.
+    private func rest() {
+        resting = true
+        state = .starting
+        camera.stop()
+        updatePreviewRate()
+        UIApplication.shared.isIdleTimerDisabled = false
+    }
+
+    private func wake() {
+        guard resting, active else { return }
+        resting = false
+        touchedAt = Date()
+        state = .starting
+        UIApplication.shared.isIdleTimerDisabled = true
+        startCamera()
+    }
+
+    private func saveEnergy() {
+        if macName != nil || state == .recording { aloneSince = Date() }
+        if !resting, state == .ready, Date().timeIntervalSince(max(aloneSince, touchedAt)) > Self.restAfter { rest() }
+        let quiet = macName != nil && !resting && pairingPhase == nil
+            && (state == .ready || state == .recording || state == .finishing)
+            && Date().timeIntervalSince(touchedAt) > Self.darkAfter
+        if quiet != dark { dark = quiet }
     }
 
     /// The phone was locked or another app came forward: finish the take cleanly before iOS stops us.
@@ -226,6 +279,14 @@ final class PhoneModel: ObservableObject {
         camera.lockForTake { [weak self] settings in
             Task { @MainActor in
                 guard let self, self.state == .recording, self.recorder == nil else { return }
+                guard let settings else {
+                    let why = "The iPhone camera could not be set up for a take."
+                    self.state = .ready
+                    self.camera.unlock()
+                    self.problem = why
+                    self.link.send(.refused(why))
+                    return
+                }
                 do {
                     let new = try TakeRecorder(directory: TakeDirectory(url: folder), takeID: id, camera: settings)
                     new.onManifest = { [link = self.link] in link.send(.manifest($0)) }
@@ -341,7 +402,16 @@ final class PhoneModel: ObservableObject {
     // MARK: - Status
 
     private func updatePreviewRate() {
-        camera.previewFPS = macName == nil ? 0 : (state == .recording ? 8 : 12)
+        // Every second frame between takes and every fourth during one.
+        camera.previewFPS = macName == nil || resting ? 0 : 8
+    }
+
+    /// Asking iOS for the free space is slow work, so between takes of it the last answer will do.
+    private func recentFreeBytes() -> Int64 {
+        if let space, Date().timeIntervalSince(space.at) < 10 { return space.bytes }
+        let bytes = freeBytes()
+        space = (bytes, Date())
+        return bytes
     }
 
     private func freeBytes() -> Int64 {
@@ -359,7 +429,8 @@ final class PhoneModel: ObservableObject {
         case .critical: heat = .critical
         @unknown default: heat = .serious
         }
-        let free = freeBytes()
+        saveEnergy()
+        let free = recentFreeBytes()
         let battery = Double(device.batteryLevel)
         let charging = device.batteryState == .charging || device.batteryState == .full
         let current = recorder?.current
@@ -372,7 +443,9 @@ final class PhoneModel: ObservableObject {
             lens: lens, freeBytes: free, bytesPerSecond: (CameraController.bitrate + 96_000) / 8, battery: battery,
             charging: charging, heat: heat, droppedFrames: current?.droppedFrames ?? 0,
             iso: camera.exposure?.iso, shutterSeconds: camera.exposure?.seconds, lensWiped: lensWiped,
-            screenMirrored: screenMirrored, fileMirrored: camera.fileMirrored)
+            screenMirrored: screenMirrored, fileMirrored: camera.fileMirrored,
+            processor: load.wholePhone(), appProcessor: load.thisApp(), cameraStrain: camera.strain,
+            cameraFPS: camera.framesPerSecond)
         warnings = status.warnings
         link.send(.status(status))
     }

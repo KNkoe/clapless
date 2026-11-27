@@ -5,46 +5,46 @@ struct AudioInView: View {
     @ObservedObject var mic: MicMonitor
     let locked: Bool     // no changing microphones during a take
 
+    @Environment(\.unit) private var u
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 8) {
-                picker
-                HStack(spacing: 5) {
-                    Circle().fill(colour).frame(width: 7, height: 7)
-                    Text(tag).font(Brand.font(11.5, 700)).foregroundStyle(colour)
+        DeckRow(label: "Mic") {
+            VStack(alignment: .leading, spacing: 6 * u) {
+                HStack(spacing: 8 * u) {
+                    picker
+                    StateMark(text: tag, colour: colour)
                 }
-                .fixedSize()
-                .accessibilityElement(children: .combine)
+                LevelMeter(bar: mic.bar, peak: mic.peak, live: mic.state != .notConnected)
+                    .frame(height: 5 * u)
             }
-            LevelMeter(bar: mic.bar, peak: mic.peak, live: mic.state != .notConnected)
-                .frame(height: 7)
-            if let note {
-                Text(note).font(Brand.font(11)).foregroundStyle(colour)
-            }
+            .padding(.trailing, 12 * u)
         }
-        .padding(11)
-        .background(Brand.bone.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .strokeBorder(mic.state == .connected ? .clear : colour.opacity(0.55), lineWidth: 1))
+        .help(note ?? "")
     }
 
     private var picker: some View {
         Menu {
             if mic.devices.isEmpty { Text("No microphones found") }
+            Toggle(mic.defaultName.map { "Mac default (\($0))" } ?? "Mac default", isOn: Binding(
+                get: { mic.selectedID == nil },
+                set: { _ in mic.select(nil) }))
+            Divider()
             ForEach(mic.devices) { device in
                 Toggle(device.name, isOn: Binding(
                     get: { mic.selectedID == device.id },
                     set: { _ in mic.select(device) }))
             }
+            if let id = mic.selectedID, !mic.devices.contains(where: { $0.id == id }) {
+                Toggle("\(mic.selectedName ?? "Your microphone") (off)", isOn: .constant(true)).disabled(true)
+            }
         } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "mic.fill").font(.system(size: 11))
-                Text(title).font(Brand.font(12.5, 600)).lineLimit(1).truncationMode(.middle)
-                Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(Brand.grey)
+            HStack(spacing: 6 * u) {
+                Text(title).font(Brand.font(12 * u, 600)).lineLimit(1).truncationMode(.middle)
+                Image(systemName: "chevron.down").font(.system(size: 8 * u, weight: .bold)).foregroundStyle(Brand.grey)
                 Spacer(minLength: 0)
             }
             .foregroundStyle(Brand.bone)
-            .frame(maxWidth: .infinity, minHeight: 24)
+            .frame(maxWidth: .infinity, minHeight: 18 * u)
             .contentShape(Rectangle())
         }
         .menuStyle(.button)
@@ -56,13 +56,13 @@ struct AudioInView: View {
     }
 
     private var title: String {
-        guard mic.selectedID != nil else { return "Choose a microphone" }
-        return mic.selectedName ?? "Microphone"
+        guard let name = mic.activeName else { return "No microphone" }
+        return mic.selectedID == nil ? "Default: \(name)" : name
     }
 
     private var tag: String {
         switch mic.state {
-        case .connected: return "Connected"
+        case .connected: return mic.standInNote == nil ? "Connected" : "Stand-in"
         case .noSound: return "No sound"
         case .notConnected: return "Not connected"
         }
@@ -71,15 +71,16 @@ struct AudioInView: View {
     private var note: String? {
         if mic.accessDenied { return "Microphone access is off in System Settings" }
         switch mic.state {
-        case .connected: return nil
-        case .noSound: return "Check the mic is on"
-        case .notConnected: return mic.selectedID == nil ? nil : "Start is off until this mic is back"
+        case .connected: return mic.standInNote
+        case .noSound: return [mic.standInNote, "Check the mic is on"].compactMap { $0 }.joined(separator: " ")
+        case .notConnected: return "Start is off until a microphone is connected"
         }
     }
 
+    /// Amber whenever another microphone is standing in.
     private var colour: Color {
         switch mic.state {
-        case .connected: return Brand.green
+        case .connected: return mic.standInNote == nil ? Brand.green : Brand.amber
         case .noSound: return Brand.amber
         case .notConnected: return Brand.red
         }
@@ -104,7 +105,7 @@ struct LevelMeter: View {
                     : i >= lit ? Brand.bone.opacity(0.1)
                     : i >= 25 ? Brand.red : i >= 21 ? Brand.amber : Brand.green
                 let cell = CGRect(x: CGFloat(i) * (width + gap), y: 0, width: width, height: size.height)
-                context.fill(Path(roundedRect: cell, cornerRadius: 1.5), with: .color(colour))
+                context.fill(Path(cell), with: .color(colour))
             }
         }
         .accessibilityElement()

@@ -10,14 +10,14 @@ struct RecordChooser: View {
         ZStack {
             Brand.ink
             VStack(spacing: 12) {
-                VStack(spacing: 4) {
+                VStack(spacing: 6) {
                     Text("What should be recorded?").font(Brand.font(19, 700)).foregroundStyle(Brand.bone)
-                    Text("Camera and voice are always on").font(Brand.font(12)).foregroundStyle(Brand.grey)
+                    Caption(text: "Camera and voice are always on")
                 }
-                .padding(.top, 44)
+                .padding(.top, 48)
                 if !model.screenAllowed { permission }
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 5) {
+                    VStack(alignment: .leading, spacing: 0) {
                         section("Whole screen")
                         ForEach(model.displays) { display in
                             row(display.name, detail: model.displays.count > 1 ? display.size : nil,
@@ -62,7 +62,7 @@ struct RecordChooser: View {
                 .foregroundStyle(Brand.ink)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
-                .background(Brand.amber, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .background(Brand.amber)
         }
         .buttonStyle(PressStyle())
     }
@@ -82,8 +82,8 @@ struct RecordChooser: View {
                 .foregroundStyle(Brand.ink)
                 .frame(maxWidth: .infinity)
                 .frame(height: 46)
-                .background(Brand.red, in: Capsule())
-                .contentShape(Capsule())
+                .background(Brand.red)
+                .contentShape(Rectangle())
             }
             .buttonStyle(PressStyle())
             .keyboardShortcut(.defaultAction)
@@ -104,12 +104,12 @@ struct RecordChooser: View {
     }
 
     private func section(_ title: String) -> some View {
-        Text(title)
-            .font(Brand.font(11, 700))
-            .foregroundStyle(Brand.grey)
-            .padding(.top, 8)
-            .padding(.leading, 4)
-            .accessibilityAddTraits(.isHeader)
+        VStack(alignment: .leading, spacing: 6) {
+            Caption(text: title)
+            Rule()
+        }
+        .padding(.top, 14)
+        .accessibilityAddTraits(.isHeader)
     }
 
     private func row(_ title: String, detail: String?, picked: Bool, @ViewBuilder icon: () -> some View,
@@ -122,15 +122,17 @@ struct RecordChooser: View {
                     if let detail { Text(detail).font(Brand.digits(10.5, 500)).foregroundStyle(Brand.grey) }
                 }
                 Spacer(minLength: 0)
-                Image(systemName: picked ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 15))
-                    .foregroundStyle(picked ? Brand.green : Brand.bone.opacity(0.2))
+                Rectangle()
+                    .fill(picked ? Brand.green : .clear)
+                    .frame(width: 8, height: 8)
+                    .padding(2)
+                    .overlay(Rectangle().strokeBorder(picked ? Brand.green : Brand.rule, lineWidth: 1))
             }
             .foregroundStyle(Brand.bone)
             .padding(.horizontal, 10)
             .frame(minHeight: 40)
-            .background(Brand.bone.opacity(picked ? 0.14 : 0.06),
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(Brand.bone.opacity(picked ? 0.08 : 0))
+            .overlay(alignment: .bottom) { Rule() }
             .contentShape(Rectangle())
         }
         .buttonStyle(PressStyle())

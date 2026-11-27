@@ -3,59 +3,64 @@ import SwiftUI
 /// What is recorded from the screen, if anything. Click to change it.
 struct ScreenInView: View {
     @ObservedObject var model: MacModel
+    @Environment(\.unit) private var u
 
     var body: some View {
-        HStack(spacing: 8) {
-            Button { model.askToRecord() } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: symbol).font(.system(size: 11))
-                    Text(model.screenName).font(Brand.font(12.5, 600)).lineLimit(1).truncationMode(.middle)
-                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(Brand.grey)
-                    Spacer(minLength: 0)
+        DeckRow(label: "Screen") {
+            HStack(spacing: 8 * u) {
+                Button { model.askToRecord() } label: {
+                    HStack(spacing: 6 * u) {
+                        Text(model.recordScreen ? model.screenName : "Off")
+                            .font(Brand.font(12 * u, 600)).lineLimit(1).truncationMode(.middle)
+                        Image(systemName: "chevron.down").font(.system(size: 8 * u, weight: .bold))
+                            .foregroundStyle(Brand.grey)
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(model.recordScreen ? Brand.bone : Brand.grey)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
                 }
-                .foregroundStyle(model.recordScreen ? Brand.bone : Brand.grey)
-                .frame(maxWidth: .infinity, minHeight: 24)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(model.phase != .idle)
-            .help("Choose a whole screen, one app, or no screen")
-            .accessibilityLabel("Screen: \(model.screenName)")
-            if model.recordScreen, !model.screenAllowed {
-                Button("Allow") { model.allowScreen() }
+                .buttonStyle(.plain)
+                .disabled(model.phase != .idle)
+                .help("Choose a whole screen, one app, or no screen")
+                .accessibilityLabel("Screen: \(model.screenName)")
+                if model.recordScreen, !model.screenAllowed {
+                    Button { model.allowScreen() } label: {
+                        Caption(text: "Allow", size: 9.5 * u, colour: Brand.ink)
+                            .padding(.horizontal, 10 * u)
+                            .frame(height: 20 * u)
+                            .background(Brand.amber)
+                    }
                     .buttonStyle(PressStyle())
-                    .font(Brand.font(12, 700))
-                    .foregroundStyle(Brand.ink)
-                    .padding(.horizontal, 12)
-                    .frame(height: 24)
-                    .background(Brand.amber, in: Capsule())
                     .help("Allow Clapless under Screen Recording, then quit and reopen it")
-            } else {
-                HStack(spacing: 5) {
-                    Circle().fill(colour).frame(width: 7, height: 7)
-                    Text(tag).font(Brand.font(11.5, 700)).foregroundStyle(colour)
+                } else if model.recordScreen {
+                    StateMark(text: tag, colour: colour)
                 }
-                .fixedSize()
             }
+            .padding(.trailing, 12 * u)
         }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 8)
-        .background(Brand.bone.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-
-    private var symbol: String {
-        if !model.recordScreen { return "display.trianglebadge.exclamationmark" }
-        return model.screenApp == nil ? "display" : "macwindow"
     }
 
     private var tag: String {
-        if !model.recordScreen { return "Not recorded" }
         if model.screenBlocker == nil { return "Ready" }
         return model.screenApp == nil ? "Not connected" : "Not open"
     }
 
-    private var colour: Color {
-        if !model.recordScreen { return Brand.grey }
-        return model.screenBlocker == nil ? Brand.green : Brand.red
+    private var colour: Color { model.screenBlocker == nil ? Brand.green : Brand.red }
+}
+
+/// A square lamp and a word: the state of an input.
+struct StateMark: View {
+    let text: String
+    let colour: Color
+    @Environment(\.unit) private var u
+
+    var body: some View {
+        HStack(spacing: 5 * u) {
+            Rectangle().fill(colour).frame(width: 5 * u, height: 5 * u)
+            Caption(text: text, size: 9.5 * u)
+        }
+        .fixedSize()
+        .accessibilityElement(children: .combine)
     }
 }

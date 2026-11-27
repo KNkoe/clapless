@@ -15,8 +15,10 @@ enum CaptureState: String, Codable, Equatable {
     case starting, ready, recording, finishing, unavailable
 }
 
-enum Heat: String, Codable, Equatable {
+enum Heat: String, Codable, Equatable, CaseIterable {
     case nominal, fair, serious, critical
+
+    var rank: Int { Self.allCases.firstIndex(of: self)! }
 }
 
 enum LinkRole: String, Codable, Equatable {
@@ -86,6 +88,10 @@ struct PhoneStatus: Codable, Equatable {
     var lensWiped: Bool?          // seen being covered and uncovered since the app was opened
     var screenMirrored: Bool?     // the picture on the iPhone's screen is flipped like a mirror
     var fileMirrored: Bool?       // the recorded frames are flipped: this should always be false
+    var processor: Double?        // share of the whole phone's processor in use, 0...100
+    var appProcessor: Double?     // Clapless's own use, as a percentage of one core
+    var cameraStrain: String?     // iOS's warning that the camera system is under pressure
+    var cameraFPS: Int?           // frames a second the camera is running at
 
     var minutesLeft: Double { bytesPerSecond > 0 ? Double(freeBytes) / Double(bytesPerSecond) / 60 : 0 }
 }

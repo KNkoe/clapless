@@ -4,6 +4,9 @@ import AVFoundation
 /// clock: the first picture of the screen recording. Sound that arrives before that moment is known
 /// is held for a few seconds, and the buffer straddling it is cut to the sample.
 ///
+/// The microphone may change part way. The file carries on in the same shape, with silence for the
+/// time in between, so sound after the change is still where it happened.
+///
 /// All calls must come on one queue.
 final class MicWriter {
     struct Result: Equatable {
@@ -21,6 +24,9 @@ final class MicWriter {
     private var firstPTS: CMTime?
     private var endPTS = CMTime.zero
     private var firstHost = 0.0
+    private var shape: CMFormatDescription?
+    private var shift = CMTime.zero      // moves a later microphone's clock onto the file's
+    private var changed = false
     private(set) var failure: String?
     private(set) var droppedBuffers = 0
 
@@ -37,6 +43,11 @@ final class MicWriter {
         let backlog = waiting
         waiting = []
         backlog.forEach { write($0.sample, hostTime: $0.hostTime) }
+    }
+
+    /// What comes next is from another microphone, with its own clock.
+    func sourceChanged() {
+        if firstPTS == nil { waiting = [] } else { changed = true }
     }
 
     /// `hostTime` is the host clock time of the buffer's first sample.
@@ -72,14 +83,104 @@ final class MicWriter {
                 return
             }
             firstHost = pieceHost
+            shape = format
         }
-        guard let input, let writer else { return }
+        guard let writer, let firstPTS, let shape else { return }
         guard writer.status == .writing else { return fail(writer.error?.localizedDescription ?? "the writer stopped") }
+        let rate = CMAudioFormatDescriptionGetStreamBasicDescription(shape)?.pointee.mSampleRate ?? 48_000
+        let scale = CMTimeScale(rate)
+        if !CMFormatDescriptionEqual(format, otherFormatDescription: shape) {
+            guard let same = Self.reshaped(piece, as: shape) else {
+                return fail("the new microphone's sound is in another format")
+            }
+            piece = same
+        }
+        if changed {
+            let own = CMSampleBufferGetPresentationTimeStamp(piece)
+            var due = firstPTS + CMTime(seconds: pieceHost - firstHost, preferredTimescale: scale)
+            // Sound already covered is left out.
+            let late = Int(((endPTS - due).seconds * rate).rounded())
+            if late > 0 {
+                let count = CMSampleBufferGetNumSamples(piece)
+                if late >= count { return }
+                var cut: CMSampleBuffer?
+                CMSampleBufferCopySampleBufferForRange(allocator: nil, sampleBuffer: piece,
+                                                       sampleRange: CFRange(location: late, length: count - late),
+                                                       sampleBufferOut: &cut)
+                guard let cut else { return fail("the sound could not be joined") }
+                piece = cut
+                shift = endPTS - CMSampleBufferGetPresentationTimeStamp(cut)
+            } else {
+                let missing = -late
+                if missing > 0 {
+                    guard let quiet = Self.silence(frames: missing, like: shape, at: endPTS) else {
+                        return fail("the gap between microphones could not be filled")
+                    }
+                    append(quiet)
+                    due = endPTS
+                }
+                shift = due - own
+            }
+            changed = false
+        }
+        if shift != .zero {
+            guard let moved = Self.moved(piece, by: shift) else { return fail("the sound could not be moved") }
+            piece = moved
+        }
+        append(piece)
+    }
+
+    private func append(_ piece: CMSampleBuffer) {
+        guard let input else { return }
         if input.isReadyForMoreMediaData, input.append(piece) {
             endPTS = CMSampleBufferGetPresentationTimeStamp(piece) + CMSampleBufferGetDuration(piece)
         } else {
             droppedBuffers += 1
         }
+    }
+
+    /// The same sound described the way the file's first sound was. Nil if the samples differ.
+    private static func reshaped(_ sample: CMSampleBuffer, as shape: CMFormatDescription) -> CMSampleBuffer? {
+        guard let old = CMSampleBufferGetFormatDescription(sample),
+              let a = CMAudioFormatDescriptionGetStreamBasicDescription(old)?.pointee,
+              let b = CMAudioFormatDescriptionGetStreamBasicDescription(shape)?.pointee,
+              a.mSampleRate == b.mSampleRate, a.mFormatID == b.mFormatID, a.mFormatFlags == b.mFormatFlags,
+              a.mBytesPerFrame == b.mBytesPerFrame, a.mChannelsPerFrame == b.mChannelsPerFrame,
+              let data = CMSampleBufferGetDataBuffer(sample) else { return nil }
+        var copy: CMSampleBuffer?
+        CMAudioSampleBufferCreateReadyWithPacketDescriptions(
+            allocator: nil, dataBuffer: data, formatDescription: shape,
+            sampleCount: CMSampleBufferGetNumSamples(sample),
+            presentationTimeStamp: CMSampleBufferGetPresentationTimeStamp(sample), packetDescriptions: nil,
+            sampleBufferOut: &copy)
+        return copy
+    }
+
+    private static func moved(_ sample: CMSampleBuffer, by shift: CMTime) -> CMSampleBuffer? {
+        var timing = CMSampleTimingInfo()
+        guard CMSampleBufferGetSampleTimingInfo(sample, at: 0, timingInfoOut: &timing) == noErr else { return nil }
+        timing.presentationTimeStamp = timing.presentationTimeStamp + shift
+        timing.decodeTimeStamp = .invalid
+        var copy: CMSampleBuffer?
+        CMSampleBufferCreateCopyWithNewTiming(allocator: nil, sampleBuffer: sample, sampleTimingEntryCount: 1,
+                                              sampleTimingArray: &timing, sampleBufferOut: &copy)
+        return copy
+    }
+
+    private static func silence(frames: Int, like format: CMFormatDescription, at time: CMTime) -> CMSampleBuffer? {
+        guard let stream = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee else { return nil }
+        let bytes = frames * Int(stream.mBytesPerFrame)
+        var block: CMBlockBuffer?
+        CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil, blockLength: bytes, blockAllocator: nil,
+                                           customBlockSource: nil, offsetToData: 0, dataLength: bytes,
+                                           flags: kCMBlockBufferAssureMemoryNowFlag, blockBufferOut: &block)
+        guard let block, CMBlockBufferFillDataBytes(with: 0, blockBuffer: block, offsetIntoDestination: 0,
+                                                    dataLength: bytes) == noErr else { return nil }
+        var sample: CMSampleBuffer?
+        CMAudioSampleBufferCreateReadyWithPacketDescriptions(
+            allocator: nil, dataBuffer: block, formatDescription: format, sampleCount: frames,
+            presentationTimeStamp: time, packetDescriptions: nil, sampleBufferOut: &sample)
+        return sample
     }
 
     private func open(channels: Int, at time: CMTime) -> Bool {
