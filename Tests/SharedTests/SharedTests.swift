@@ -277,3 +277,13 @@ final class MicLevelTests: XCTestCase {
         XCTAssertEqual(MicLevel.decibels(0), -160)
     }
 }
+
+final class TorchTests: XCTestCase {
+    func testOnReturnsToTheLastBrightnessAndBrightnessNeverSwitchesOff() {
+        XCTAssertEqual(Torch.off.toggled(lastUsed: .medium), .medium)
+        XCTAssertEqual(Torch.off.toggled(lastUsed: .off), .low)
+        XCTAssertEqual(Torch.high.toggled(lastUsed: .high), .off)
+        XCTAssertEqual([Torch.low, .medium, .high].map(\.nextBrightness), [.medium, .high, .low])
+        XCTAssertEqual(Torch.allCases.map(\.level), Torch.allCases.map(\.level).sorted())
+    }
+}

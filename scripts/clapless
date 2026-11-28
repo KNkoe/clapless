@@ -5,9 +5,12 @@
   clapless start               start a take without asking, with the last screen choice
   clapless stop                stop it (returns once the microphone file is saved)
   clapless takes               recent takes and how far each transfer is
+  clapless disconnect          stop the iPhone and let it close (after any transfer)
+  clapless connect             link to the iPhone again
   clapless mic NAME            choose the Mac microphone by part of its name
   clapless mic default         follow the input chosen in System Settings
   clapless lens back|front     choose the iPhone camera
+  clapless light off|low|medium|high   the iPhone flashlight (back camera)
   clapless speedtest [MB]      measure how fast the iPhone can send to this Mac
   clapless direct on|off       talk iPhone to Mac directly instead of through the router
   clapless screen on|off       record the screen with the take, or not
@@ -22,7 +25,7 @@ import json, os, socket, subprocess, sys, time
 
 SOCKET = os.path.expanduser("~/Library/Application Support/Clapless/control.sock")
 APP = os.path.expanduser("~/Applications/Clapless.app")
-COMMANDS = {"status", "start", "stop", "takes", "mic", "lens", "speedtest", "direct", "screen", "apps", "sync"}
+COMMANDS = {"status", "start", "stop", "takes", "mic", "lens", "light", "disconnect", "connect", "speedtest", "direct", "screen", "apps", "sync"}
 
 
 def connect():

@@ -176,7 +176,8 @@ private struct QuietScreen: View {
                             .foregroundStyle(Brand.red)
                     }
                 }
-                Text(model.resting ? "Camera resting" : "Your Mac is showing the picture")
+                Text(model.disconnected && model.resting ? "Disconnected"
+                     : model.resting ? "Camera resting" : "Your Mac is showing the picture")
                     .font(Brand.font(4.6 * w, 700))
                     .foregroundStyle(Brand.bone.opacity(0.7))
                 if let sending = model.sending {
@@ -187,7 +188,15 @@ private struct QuietScreen: View {
                 ForEach(model.resting ? [] : ([model.problem].compactMap { $0 }) + model.warnings, id: \.self) {
                     Text($0).font(Brand.font(3.6 * w)).foregroundStyle(Brand.amber)
                 }
-                Text(model.resting ? "No Mac for a while. Tap to wake." : "Tap to see it here")
+                if model.resting, let left = model.closingIn {
+                    Text("Clapless closes in \(left / 60):\(String(format: "%02d", left % 60))")
+                        .font(Brand.digits(4.6 * w, 700))
+                        .foregroundStyle(Brand.bone)
+                        .contentTransition(.numericText(countsDown: true))
+                }
+                Text(!model.resting ? "Tap to see it here"
+                     : model.disconnected ? "Camera and light are off. Tap to keep it open."
+                     : "No Mac for a while. Tap to wake.")
                     .font(Brand.font(3.6 * w))
                     .foregroundStyle(Brand.grey)
             }

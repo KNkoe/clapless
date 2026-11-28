@@ -50,6 +50,53 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
 
     private(set) var lens: Lens = .back
 
+    private var torchSetting = Torch.off     // behind `flags`
+    private var torchAsked: Torch {
+        get { flags.withLock { torchSetting } }
+        set { flags.withLock { torchSetting = newValue } }
+    }
+
+    /// What the light is doing now, which is not always what was asked: iOS can put it out when
+    /// the phone is hot. Nil when the camera in use has no light.
+    var torch: Torch? {
+        guard let device, device.hasTorch else { return nil }
+        return device.torchMode == .off || !device.isTorchAvailable ? .off : torchAsked
+    }
+
+    func setTorch(_ wanted: Torch, completion: @escaping (String?) -> Void) {
+        sessionQueue.async { [self] in
+            guard let camera = device, camera.hasTorch, session.isRunning else {
+                return completion("The light only works with the back camera.")
+            }
+            completion(light(camera, wanted))
+        }
+    }
+
+    /// Session queue only. Returns why the light could not be changed.
+    private func light(_ camera: AVCaptureDevice, _ wanted: Torch) -> String? {
+        do {
+            try camera.lockForConfiguration()
+            defer { camera.unlockForConfiguration() }
+            if wanted == .off {
+                camera.torchMode = .off
+            } else {
+                guard camera.isTorchAvailable else { return "The iPhone has the light off for now. Let it cool." }
+                // A warm phone may allow less than full brightness; this constant means "the most allowed".
+                try camera.setTorchModeOn(level: wanted == .high ? AVCaptureDevice.maxAvailableTorchLevel
+                                                                 : wanted.level)
+            }
+            torchAsked = wanted
+            return nil
+        } catch {
+            return "The light did not come on: \(error.localizedDescription)"
+        }
+    }
+
+    /// Session queue only: nothing may be left shining on a camera that is no longer in use.
+    private func darken() {
+        if let camera = device, camera.hasTorch { _ = light(camera, .off) }
+    }
+
     /// Whether the recorded frames are flipped. They must never be.
     var fileMirrored: Bool? { videoOutput.connection(with: .video)?.isVideoMirrored }
 
@@ -101,6 +148,7 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     /// Stop the sensor altogether. `start` brings it back.
     func stop() {
         sessionQueue.async { [self] in
+            darken()
             if session.isRunning { session.stopRunning() }
         }
     }
@@ -150,6 +198,7 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
         guard let format = usable.first(where: { !$0.isVideoBinned }) ?? usable.first else {
             throw RecorderError("This camera has no 4K 30 ordinary-colour mode.")
         }
+        if camera.uniqueID != device?.uniqueID { darken() }
         session.beginConfiguration()
         defer { session.commitConfiguration() }
         session.inputs.compactMap { $0 as? AVCaptureDeviceInput }.filter { $0.device.hasMediaType(.video) }

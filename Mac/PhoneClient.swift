@@ -28,6 +28,7 @@ final class PhoneClient {
     private var record: PairRecord? = PairStore.load().first
     private var control: FramedLink?
     private var linked = false
+    private var held = false           // disconnected on purpose: do not reconnect
     private var endpoint: NWEndpoint?
     private var attempt = 0
     private var pinger: DispatchSourceTimer?
@@ -128,8 +129,31 @@ final class PhoneClient {
         }
     }
 
+    /// Tell the iPhone this is on purpose, so it stops and closes, then stay away.
+    func disconnect() {
+        queue.async { [self] in
+            held = true
+            guard let link = control else { return }
+            guard linked else { return link.close() }
+            link.send(message: MacMessage.disconnect)
+            // A moment for the message to leave before the connection goes.
+            queue.asyncAfter(deadline: .now() + 0.4) { [weak self, weak link] in
+                if self?.held == true { link?.close("disconnected") }
+            }
+        }
+    }
+
+    func reconnect() {
+        queue.async { [self] in
+            held = false
+            control?.close()     // one that has already said goodbye is no use
+            tryDirect = true
+            connectIfNeeded()
+        }
+    }
+
     private func connectIfNeeded() {
-        guard control == nil, record != nil, !found.isEmpty else { return }
+        guard !held, control == nil, record != nil, !found.isEmpty else { return }
         // Another iPhone with Clapless would refuse our key, so try each in turn.
         let target = found[attempt % found.count].endpoint
         attempt += 1
@@ -247,6 +271,7 @@ final class PhoneClient {
                         return
                     }
                     self.record = new
+                    self.held = false
                     self.control?.close()
                     self.main { self.onPaired?(new.peerName) }
                 }

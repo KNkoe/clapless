@@ -38,7 +38,8 @@ struct MainView: View {
     private func header(_ u: CGFloat) -> some View {
         ZStack {
             Wordmark(size: 16 * u)
-            HStack {
+            HStack(spacing: 0) {
+                connectionButton(u)
                 Spacer()
                 Button { floating.toggle() } label: {
                     Image(systemName: floating ? "pin.fill" : "pin")
@@ -52,6 +53,25 @@ struct MainView: View {
                 .accessibilityLabel("Keep above other windows")
                 .accessibilityAddTraits(floating ? .isSelected : [])
             }
+        }
+    }
+
+    /// Disconnect when the filming is done, so the iPhone stops and closes; Connect to come back.
+    @ViewBuilder private func connectionButton(_ u: CGFloat) -> some View {
+        if model.disconnected || model.canDisconnect {
+            Button { model.disconnected ? model.connect() : model.disconnect() } label: {
+                Caption(text: model.disconnected ? "Connect" : model.leaving ? "Leave now" : "Disconnect",
+                        size: 9.5 * u, colour: Brand.bone)
+                    .padding(.horizontal, 8 * u)
+                    .frame(height: 22 * u)
+                    .overlay(Rectangle().strokeBorder(Brand.rule, lineWidth: 1))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PressStyle())
+            .padding(.leading, 10 * u)
+            .help(model.disconnected ? "Link to the iPhone again. Open Clapless on it first."
+                  : model.leaving ? "Disconnect now. The take finishes sending next time."
+                  : "Stop the iPhone's camera and close Clapless on it")
         }
     }
 
@@ -69,7 +89,8 @@ struct MainView: View {
                     .scaleEffect(x: -1)
                     .accessibilityLabel("Live picture from the iPhone")
             } else {
-                Placeholder(message: model.linked ? "Waiting for the picture"
+                Placeholder(message: model.disconnected ? "Disconnected. To film again, open Clapless on your iPhone, then Connect."
+                            : model.linked ? "Waiting for the picture"
                             : model.pairedName == nil ? "To pair, open Clapless on your iPhone"
                             : "Open Clapless on your iPhone")
             }
@@ -79,7 +100,13 @@ struct MainView: View {
                 .allowsHitTesting(false)
         }
         .overlay(alignment: .topLeading) { stateTag(u).padding(18 * u) }
-        .overlay(alignment: .topTrailing) { lensTag(u).padding(18 * u) }
+        .overlay(alignment: .topTrailing) {
+            VStack(alignment: .trailing, spacing: 8 * u) {
+                lensTag(u)
+                torchTag(u)
+            }
+            .padding(18 * u)
+        }
         .overlay(alignment: .bottom) { warnings(u).padding(18 * u) }
         .overlay { if showTakes { TakesView(model: model) } }
         .overlay(Rectangle().strokeBorder(recording ? Brand.red : .clear, lineWidth: 2))
@@ -128,6 +155,45 @@ struct MainView: View {
             .buttonStyle(PressStyle())
             .disabled(model.phase != .idle)
             .help("Switch between the back and front camera")
+        }
+    }
+
+    /// The iPhone's flashlight: one button for on and off, and while it is on, one for brightness.
+    @ViewBuilder private func torchTag(_ u: CGFloat) -> some View {
+        if let torch = model.status?.torch, !recording {
+            let on = torch != .off
+            HStack(spacing: 0) {
+                Button { model.toggleTorch() } label: {
+                    HStack(spacing: 7 * u) {
+                        Image(systemName: on ? "flashlight.on.fill" : "flashlight.off.fill")
+                            .font(.system(size: 10 * u, weight: .semibold))
+                        Caption(text: on ? "Light" : "Light Off", size: 10.5 * u, colour: on ? Brand.ink : Brand.bone)
+                    }
+                    .foregroundStyle(on ? Brand.ink : Brand.bone)
+                    .padding(.horizontal, 9 * u)
+                    .frame(height: 26 * u)
+                    .background(on ? Brand.bone : .clear)
+                    .contentShape(Rectangle())
+                }
+                .help(on ? "Turn the iPhone light off" : "Turn the iPhone light on")
+                .accessibilityLabel("iPhone light")
+                .accessibilityValue(on ? "On, \(torch.rawValue)" : "Off")
+                if on {
+                    Button { model.brightenTorch() } label: {
+                        Caption(text: torch == .medium ? "Med" : torch.rawValue.capitalized, size: 10.5 * u,
+                                colour: Brand.bone)
+                            .frame(minWidth: 40 * u)
+                            .frame(height: 26 * u)
+                            .contentShape(Rectangle())
+                    }
+                    .help("Change brightness: low, medium, high")
+                    .accessibilityLabel("Light brightness, \(torch.rawValue)")
+                }
+            }
+            .background(Brand.ink.opacity(0.72))
+            .overlay(Rectangle().strokeBorder(Brand.rule, lineWidth: 1))
+            .buttonStyle(PressStyle())
+            .disabled(model.phase != .idle)
         }
     }
 

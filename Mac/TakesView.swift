@@ -47,7 +47,8 @@ struct TakeSummary {
         if take.status == .ready, let camera = take.camera {
             let screen = take.screen == nil ? " · no screen" : ""
             let note = take.warnings.first.map { "\n\($0)" } ?? ""
-            return "\(timecode(camera.seconds)) · \(bytes(camera.bytes))\(screen)\n\(syncWords ?? "")\(note)"
+            let total = camera.bytes + (take.mic?.bytes ?? 0) + (take.screen?.bytes ?? 0)
+            return "\(timecode(camera.seconds)) · \(bytes(total))\(screen)\n\(syncWords ?? "")\(note)"
         }
         guard let progress else { return "Open Clapless on the iPhone" }
         if progress.checking { return "\(bytes(progress.listed)) · making sure nothing is missing" }
@@ -63,25 +64,36 @@ struct TakeSummary {
         return seconds >= 90 ? "about \((seconds + 30) / 60) min left" : "\(seconds) s left"
     }
 
-    private func bytes(_ count: Int) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(max(0, count)), countStyle: .file)
-    }
+    private func bytes(_ count: Int) -> String { fileSize(count) }
+}
+
+private func fileSize(_ count: Int) -> String {
+    ByteCountFormatter.string(fromByteCount: Int64(max(0, count)), countStyle: .file)
 }
 
 /// Every take, newest first, ruled like a parts list. Drawn over the picture.
 struct TakesView: View {
     @ObservedObject var model: MacModel
+    @State private var asking: String?          // the take whose delete is waiting for a yes
+    @State private var sizes: [String: Int] = [:]
 
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 HStack {
-                    Caption(text: "Takes")
+                    Caption(text: model.takes.isEmpty ? "Takes" : "Takes · \(fileSize(sizes.values.reduce(0, +)))")
                     Spacer()
                     Caption(text: "Movies › Clapless")
                 }
                 .padding(14)
                 Rule()
+                if let problem = model.deleteProblem {
+                    note(problem, colour: Brand.amber)
+                }
+                if model.deletesWaiting > 0 {
+                    let count = model.deletesWaiting == 1 ? "1 deleted take is" : "\(model.deletesWaiting) deleted takes are"
+                    note("\(count) still on the iPhone. Open Clapless there to free the space.", colour: Brand.grey)
+                }
                 if model.takes.isEmpty {
                     Text("Takes appear here.")
                         .font(Brand.font(13))
@@ -90,18 +102,94 @@ struct TakesView: View {
                 }
                 ForEach(model.takes) { take in
                     TakeRow(summary: TakeSummary(take: take, progress: model.progress[take.take],
-                                                 linked: model.linked)) { model.reveal(take) }
+                                                 linked: model.linked),
+                            deletable: model.canDelete(take),
+                            reveal: { model.reveal(take) },
+                            askDelete: { asking = asking == take.take ? nil : take.take })
+                    if asking == take.take, model.canDelete(take) {
+                        DeleteQuestion(take: take, size: sizes[take.take] ?? 0, linked: model.linked,
+                                       delete: { toTrash in asking = nil; model.delete(take, toTrash: toTrash) },
+                                       cancel: { asking = nil })
+                    }
                     Rule()
                 }
             }
         }
         .background(Brand.ink.opacity(0.97))
+        // Measured when the list opens or a take changes, not on every redraw.
+        .task(id: model.takes.map { "\($0.take) \($0.status.rawValue)" }) {
+            sizes = Dictionary(uniqueKeysWithValues: model.takes.map { ($0.take, model.size(of: $0)) })
+        }
+    }
+
+    @ViewBuilder private func note(_ text: String, colour: Color) -> some View {
+        Text(text)
+            .font(Brand.font(11.5, 500))
+            .foregroundStyle(colour)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+        Rule()
+    }
+}
+
+/// Asked in place, under the take it is about, saying exactly what goes.
+private struct DeleteQuestion: View {
+    let take: TakeRecord
+    let size: Int
+    let linked: Bool
+    let delete: (_ toTrash: Bool) -> Void
+    let cancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Delete this take?").font(Brand.font(13, 700)).foregroundStyle(Brand.bone)
+            Text(what).font(Brand.digits(11.5, 500)).foregroundStyle(Brand.bone)
+            if take.camera == nil {
+                Text("The camera file never arrived here, so the iPhone may hold the only full copy.")
+                    .font(Brand.font(11.5, 600)).foregroundStyle(Brand.amber)
+            }
+            HStack(spacing: 8) {
+                button("Delete", fill: Brand.red, text: Brand.ink,
+                       help: "Frees the space now. This cannot be undone.") { delete(false) }
+                button("Move to Trash", help: "The Mac files stay in the Trash until you empty it") { delete(true) }
+                Spacer(minLength: 0)
+                button("Cancel", help: "Keep the take", run: cancel)
+            }
+            Text("Delete cannot be undone. The Trash frees no Mac space until you empty it.")
+                .font(Brand.font(10.5, 500)).foregroundStyle(Brand.grey)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .leading) { Rectangle().fill(Brand.red).frame(width: 2) }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var what: String {
+        linked ? "Removes \(fileSize(size)) from this Mac, and the iPhone's copy."
+            : "Removes \(fileSize(size)) from this Mac. The iPhone's copy goes when it next connects."
+    }
+
+    private func button(_ title: String, fill: Color = .clear, text: Color = Brand.bone, help: String,
+                        run: @escaping () -> Void) -> some View {
+        Button(action: run) {
+            Caption(text: title, colour: text)
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .background(fill)
+                .overlay(Rectangle().strokeBorder(fill == .clear ? Brand.rule : fill, lineWidth: 1))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressStyle())
+        .help(help)
     }
 }
 
 private struct TakeRow: View {
     let summary: TakeSummary
+    let deletable: Bool
     let reveal: () -> Void
+    let askDelete: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -123,6 +211,19 @@ private struct TakeRow: View {
                     .buttonStyle(PressStyle())
                     .help("Show in Finder")
                 }
+                Button(action: askDelete) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Brand.bone)
+                        .frame(width: 28, height: 24)
+                        .overlay(Rectangle().strokeBorder(Brand.rule, lineWidth: 1))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PressStyle())
+                .disabled(!deletable)
+                .opacity(deletable ? 1 : 0.35)
+                .help(deletable ? "Delete this take" : "This take is still being recorded or checked")
+                .accessibilityLabel("Delete take from \(summary.when)")
             }
             if !summary.finished {
                 Text(summary.title).font(Brand.font(12, 600)).foregroundStyle(Brand.bone)
@@ -133,6 +234,7 @@ private struct TakeRow: View {
                 .foregroundStyle(Brand.grey)
                 .lineLimit(3)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .help(summary.take.warnings.joined(separator: "\n"))
         .accessibilityElement(children: .contain)
@@ -169,7 +271,15 @@ struct StatusLine: View {
     }
 
     @ViewBuilder private var content: some View {
-        if model.phase == .idle, let blocker = model.deviceBlocker {
+        if model.leaving {
+            line("Disconnecting when the take has arrived")
+            Spacer(minLength: 0)
+            if let left = sending?.timeLeft { Caption(text: left, size: 9.5 * u) }
+        } else if model.disconnected {
+            line("Disconnected from the iPhone", colour: Brand.grey)
+            Spacer(minLength: 0)
+            action("Connect", help: "Open Clapless on the iPhone first") { model.connect() }
+        } else if model.phase == .idle, let blocker = model.deviceBlocker {
             line(blocker, colour: Brand.amber)
         } else if model.phase != .idle {
             line(model.recordScreen ? "Recording camera, mic and \(model.screenName)" : "Recording camera and mic")

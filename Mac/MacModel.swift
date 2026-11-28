@@ -22,6 +22,10 @@ final class MacModel: ObservableObject {
     @Published private(set) var message: String?          // why the last take did not go as asked
     @Published private(set) var takes: [TakeRecord] = []
     @Published private(set) var progress: [String: Downloader.Progress] = [:]
+    @Published private(set) var deletesWaiting = 0        // deleted here, still on the iPhone
+    @Published private(set) var deleteProblem: String?
+    @Published private(set) var disconnected = false      // on purpose, until Connect is pressed
+    @Published private(set) var leaving = false           // disconnecting once the take has arrived
     @Published private(set) var macFreeBytes: Int64?
     @Published private(set) var displays: [ScreenDisplay] = []
     @Published private(set) var screenAllowed = ScreenRecorder.allowed
@@ -84,6 +88,7 @@ final class MacModel: ObservableObject {
         library.onChange = { [weak self] list in
             MainActor.assumeIsolated {
                 self?.takes = list
+                self?.deletesWaiting = self?.library.awaitingPhoneDelete().count ?? 0
                 self?.sync.catchUp(list)
             }
         }
@@ -122,6 +127,7 @@ final class MacModel: ObservableObject {
         if mic.accessDenied { return "Allow the microphone in System Settings" }
         if mic.state == .notConnected { return "No microphone found" }
         if pairedName == nil { return "Pair your iPhone first" }
+        if disconnected { return "Disconnected from the iPhone" }
         guard linked, let status else { return "Open Clapless on your iPhone" }
         switch status.state {
         case .ready: break
@@ -242,6 +248,7 @@ final class MacModel: ObservableObject {
     func startTake() -> String? {
         guard phase == .idle else { return "A take is already running." }
         if let blocker { return blocker }
+        leaving = false
         let id = Self.newTakeID(existing: library.folder)
         do {
             try library.create(id, created: Date(), status: .recording)
@@ -410,9 +417,87 @@ final class MacModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([library.folder(record.take)])
     }
 
+    /// Not while either device is still writing the take, or the Mac is checking it.
+    func canDelete(_ record: TakeRecord) -> Bool {
+        let onPhone = status?.takeID == record.take && (status?.state == .recording || status?.state == .finishing)
+        return takeID != record.take && !onPhone && progress[record.take]?.checking != true
+    }
+
+    /// What the take takes up on this Mac.
+    func size(of record: TakeRecord) -> Int { TakeRemoval.size(of: library.folder(record.take)) }
+
+    func delete(_ record: TakeRecord, toTrash: Bool) {
+        guard canDelete(record) else { return }
+        deleteProblem = nil
+        downloader.delete(record.take, toTrash: toTrash) { [weak self] why in
+            MainActor.assumeIsolated {
+                self?.deleteProblem = why
+                self?.freeCheckedAt = .distantPast
+            }
+        }
+    }
+
     func switchLens() {
         guard phase == .idle, let status, status.state == .ready else { return }
         client.send(.setLens(status.lens == .back ? .front : .back))
+    }
+
+    // MARK: - Disconnecting
+
+    /// A take still on its way, or being checked.
+    var sendingTake: Bool { progress.values.contains { $0.problem == nil && ($0.checking || !$0.recording) } }
+
+    var canDisconnect: Bool {
+        linked && !disconnected && phase == .idle && status?.state != .recording && status?.state != .finishing
+    }
+
+    /// Stop everything: the iPhone turns its camera off and closes shortly after. A take still being
+    /// sent is let through first; pressing again leaves at once, and it carries on next time.
+    func disconnect() {
+        guard canDisconnect else { return }
+        if sendingTake, !leaving {
+            leaving = true
+        } else {
+            leave()
+        }
+    }
+
+    private func leave() {
+        leaving = false
+        disconnected = true
+        choosing = false
+        message = nil
+        client.disconnect()
+    }
+
+    func connect() {
+        leaving = false
+        guard disconnected else { return }
+        disconnected = false
+        client.reconnect()
+    }
+
+    // MARK: - The light
+
+    private var lastTorch: Torch {
+        get { Torch(rawValue: UserDefaults.standard.string(forKey: "torch.level") ?? "") ?? .low }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "torch.level") }
+    }
+
+    func toggleTorch() {
+        guard let current = status?.torch else { return }
+        setTorch(current.toggled(lastUsed: lastTorch))
+    }
+
+    func brightenTorch() {
+        guard let current = status?.torch, current != .off else { return }
+        setTorch(current.nextBrightness)
+    }
+
+    private func setTorch(_ wanted: Torch) {
+        guard phase == .idle, status?.state == .ready else { return }
+        if wanted != .off { lastTorch = wanted }
+        client.send(.setTorch(wanted))
     }
 
     // MARK: - From the phone
@@ -427,6 +512,8 @@ final class MacModel: ObservableObject {
             quality = nil
         }
         downloader.linkChanged(up)
+        // Lost while waiting to leave: stay away, and the iPhone closes itself for want of a Mac.
+        if !up, leaving { leave() }
     }
 
     private func handle(_ incoming: PhoneMessage) {
@@ -466,6 +553,8 @@ final class MacModel: ObservableObject {
             }
         case .takes(let list):
             list.forEach { downloader.offer($0) }
+        case .takeDeleted(let id):
+            downloader.phoneDeleted(id)
         case .refused(let why):
             if phase == .starting { stopTake(because: why) } else { message = why }
         case .exposure(let iso, let seconds):
@@ -488,6 +577,7 @@ final class MacModel: ObservableObject {
     }
 
     private func tick() {
+        if leaving, canDisconnect, !sendingTake { leave() }
         if phase == .recording { elapsed = Date().timeIntervalSince(startedAt) }
         if choosing, Date().timeIntervalSince(appsCheckedAt) > 1 { refreshSources() }
         if Date().timeIntervalSince(freeCheckedAt) > 5 {
@@ -516,6 +606,7 @@ final class MacModel: ObservableObject {
     private func pairingChanged(_ new: PairingSession.Phase?) {
         pairingPhase = new
         if case .done = new {
+            disconnected = false
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(1.6))
                 if case .done = pairingPhase { pairingPhase = nil }
@@ -586,6 +677,20 @@ final class MacModel: ObservableObject {
             guard phase == .idle, linked else { return no("Not now.") }
             client.send(.setLens(lens))
             ok()
+        case "light":
+            guard let wanted = argument.flatMap(Torch.init(rawValue:)) else { return no("Use: light off|low|medium|high") }
+            guard phase == .idle, linked, status?.state == .ready else { return no("Not now.") }
+            guard status?.torch != nil else { return no("The light only works with the back camera.") }
+            setTorch(wanted)
+            ok()
+        case "disconnect":
+            if disconnected { return ok(["disconnected": true]) }
+            guard canDisconnect else { return no(linked ? "Stop the take first." : "The iPhone is not linked.") }
+            disconnect()
+            ok(["disconnected": disconnected, "afterTransfer": leaving])
+        case "connect":
+            connect()
+            ok()
         case "direct":
             guard let argument, ["on", "off"].contains(argument) else { return no("Use: direct on|off") }
             guard phase == .idle else { return no("Not during a take.") }
@@ -615,10 +720,12 @@ final class MacModel: ObservableObject {
     private func orNull(_ value: String?) -> Any { value.map { $0 as Any } ?? NSNull() }
 
     private func summary() -> [String: Any] {
-        var phone: [String: Any] = ["paired": orNull(pairedName), "linked": linked]
+        var phone: [String: Any] = ["paired": orNull(pairedName), "linked": linked,
+                                    "disconnected": disconnected, "disconnectingAfterTransfer": leaving]
         if let status {
             phone["state"] = status.state.rawValue
             phone["lens"] = status.lens.rawValue
+            phone["torch"] = orNull(status.torch?.rawValue)
             phone["freeGB"] = Double(status.freeBytes / 100_000_000) / 10
             phone["minutesLeft"] = Int(status.minutesLeft)
             phone["battery"] = status.battery

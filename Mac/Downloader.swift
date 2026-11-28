@@ -63,7 +63,12 @@ final class Downloader: @unchecked Sendable {
     func linkChanged(_ up: Bool) {
         queue.async { [self] in
             linked = up
-            if up { retryAfter = .distantPast } else { drop() }
+            if up {
+                retryAfter = .distantPast
+                library.awaitingPhoneDelete().forEach { client.send(.deleteTake(takeID: $0)) }
+            } else {
+                drop()
+            }
             next()
         }
     }
@@ -75,6 +80,31 @@ final class Downloader: @unchecked Sendable {
         }
     }
 
+    /// Delete a take here and ask the iPhone to delete its copy, now or when it next connects.
+    /// `completion` gets the reason when nothing could be deleted, on the main queue.
+    func delete(_ take: String, toTrash: Bool, completion: @escaping (String?) -> Void) {
+        queue.async { [self] in
+            func answer(_ why: String?) { DispatchQueue.main.async { completion(why) } }
+            guard assembling != take else { return answer("That take is still being checked. Try again in a moment.") }
+            do {
+                try library.delete(take, toTrash: toTrash)
+            } catch {
+                return answer("Could not delete the take: \(error.localizedDescription)")
+            }
+            jobs[take] = nil
+            if asking?.take == take { drop() }
+            report(take)
+            if linked { client.send(.deleteTake(takeID: take)) }
+            answer(nil)
+            next()
+        }
+    }
+
+    /// Queued behind anything the phone sent before it, so an old listing cannot bring the take back.
+    func phoneDeleted(_ take: String) {
+        queue.async { [self] in library.phoneDeleted(take) }
+    }
+
     /// The phone says it cannot supply something that was asked for.
     private func refused(_ why: String) {
         guard let asked = asking else { return }
@@ -84,6 +114,10 @@ final class Downloader: @unchecked Sendable {
     private func accept(_ manifest: TakeManifest) {
         let take = manifest.takeID
         guard isSafeTakeID(take) else { return }
+        if library.awaitingPhoneDelete().contains(take) {
+            client.send(.deleteTake(takeID: take))
+            return
+        }
         if let camera = library.record(take)?.camera {
             // Already here. Tell the phone again in case the message was lost.
             if let sha = manifest.sha256, sha == camera.phoneSha256 {

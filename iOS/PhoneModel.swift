@@ -17,8 +17,13 @@ final class PhoneModel: ObservableObject {
     @Published private(set) var recordedYet = false
     @Published private(set) var lensNote = LensNote.remind
     @Published private(set) var dark = false       // blacked out while the Mac shows the picture
-    @Published private(set) var resting = false    // camera off after a while with no Mac
+    @Published private(set) var resting = false    // camera off: disconnected, or a while with no Mac
+    @Published private(set) var closingIn: Int?    // seconds until the app closes itself, once it shows
+    @Published private(set) var disconnected = false   // Disconnect was pressed on the Mac
+    private var closer = CloseTimer()
+    private var closing = false
     private var touchedAt = Date()
+    private var torchWanted = Torch.off
     private var aloneSince = Date()
     private var space: (bytes: Int64, at: Date)?
 
@@ -59,7 +64,14 @@ final class PhoneModel: ObservableObject {
             MainActor.assumeIsolated {
                 self?.macName = name
                 self?.aloneSince = Date()
-                if name != nil { self?.wake() } else { self?.dark = false }
+                if name != nil {
+                    self?.stay()
+                    self?.wake()
+                } else {
+                    self?.dark = false
+                    // The Mac holds the switch, so the light goes out with it. A running take keeps it.
+                    if self?.state != .recording { self?.setTorch(.off) }
+                }
                 self?.updatePreviewRate()
                 self?.tick()
             }
@@ -94,10 +106,11 @@ final class PhoneModel: ObservableObject {
 
     /// iOS only lets the camera run while the app is open on an unlocked phone.
     func activate() {
-        guard !active || state == .unavailable else { return }
+        guard !closing, !active || state == .unavailable else { return }
         let first = !active
         active = true
         resting = false
+        stay()
         touched()
         aloneSince = Date()
         UIApplication.shared.isIdleTimerDisabled = true
@@ -146,20 +159,56 @@ final class PhoneModel: ObservableObject {
 
     // MARK: - Staying cool
 
-    /// Any tap: light the screen again, and bring the camera back if it was resting.
+    /// Any tap: light the screen again, bring the camera back if it was resting, and stay open.
     func touched() {
+        stay()
         touchedAt = Date()
         dark = false
         wake()
     }
 
-    /// With no Mac and nobody touching it, the camera goes off and the phone may lock as usual.
+    /// The camera goes off and the screen black. The app stays awake only so that it can close itself.
     private func rest() {
         resting = true
         state = .starting
+        torchWanted = .off
         camera.stop()
         updatePreviewRate()
+    }
+
+    /// Call off any countdown to closing.
+    private func stay() {
+        closer.stay(at: Date())
+        closingIn = nil
+        disconnected = false
+    }
+
+    /// Disconnect on the Mac: stop the camera and light now, and close shortly.
+    private func goodbye() {
+        closer.disconnected(at: Date())
+        disconnected = true
+        dark = false
+        setTorch(.off)
+        if state != .recording, state != .finishing, !resting { rest() }
+        saveEnergy()
+    }
+
+    /// Stop everything and leave. iOS offers an app no polite way to close itself, so the process
+    /// ends; takes are already safe on disk. The phone then locks as it usually would.
+    private func close() {
+        guard recorder == nil, !closing else { return }
+        closing = true
+        timer?.invalidate()
+        timer = nil
+        torchWanted = .off
+        camera.stop()
+        link.stop()
         UIApplication.shared.isIdleTimerDisabled = false
+        // A moment for the camera, light and network to let go.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(0.8))
+            exit(0)
+        }
     }
 
     private func wake() {
@@ -173,7 +222,21 @@ final class PhoneModel: ObservableObject {
 
     private func saveEnergy() {
         if macName != nil || state == .recording { aloneSince = Date() }
-        if !resting, state == .ready, Date().timeIntervalSince(max(aloneSince, touchedAt)) > Self.restAfter { rest() }
+        let pairing: Bool
+        switch pairingPhase {
+        case .exchanging, .compare, .waitingForPeer: pairing = true
+        default: pairing = false
+        }
+        let busy = state == .recording || state == .finishing || pairing
+        if let left = closer.secondsLeft(at: Date(), linked: macName != nil, busy: busy) {
+            if left <= 0 { return close() }
+            // A disconnect shows its countdown at once; otherwise only the resting screen needs it.
+            closingIn = Int(left.rounded(.up))
+        } else {
+            closingIn = nil
+        }
+        let quietEnough = Date().timeIntervalSince(max(aloneSince, touchedAt)) > Self.restAfter
+        if !resting, state == .ready, disconnected || quietEnough { rest() }
         let quiet = macName != nil && !resting && pairingPhase == nil
             && (state == .ready || state == .recording || state == .finishing)
             && Date().timeIntervalSince(touchedAt) > Self.darkAfter
@@ -186,7 +249,10 @@ final class PhoneModel: ObservableObject {
         background = UIApplication.shared.beginBackgroundTask { [weak self] in
             MainActor.assumeIsolated { self?.endBackgroundTask() }
         }
+        // Locked or put away after a disconnect, or while already resting: nothing left to wait for.
+        if recorder == nil, disconnected || resting { return close() }
         active = false
+        torchWanted = .off
         UIApplication.shared.isIdleTimerDisabled = false
         timer?.invalidate()
         timer = nil
@@ -210,6 +276,7 @@ final class PhoneModel: ObservableObject {
 
     private func interrupted(_ why: String) {
         if recorder != nil { stopTake(reason: why) }
+        torchWanted = .off
         state = .unavailable
         problem = why
         tick()
@@ -222,15 +289,35 @@ final class PhoneModel: ObservableObject {
         case .startTake(let id): startTake(id)
         case .stopTake: stopTake(reason: nil)
         case .setLens(let new): choose(new)
+        case .setTorch(let wanted): setTorch(wanted)
         case .listTakes: link.send(.takes(storedTakes()))
         case .takeVerified(let id, let sha): markVerified(id, sha)
+        case .deleteTake(let id): deleteTake(id)
+        case .disconnect: goodbye()
         default: break
+        }
+    }
+
+    /// Not during a take: exposure is locked then, so the picture would jump in brightness.
+    private func setTorch(_ wanted: Torch) {
+        guard state == .ready else { return }
+        camera.setTorch(wanted) { [weak self] why in
+            Task { @MainActor in
+                guard let self else { return }
+                if let why {
+                    self.link.send(.refused(why))
+                } else {
+                    self.torchWanted = wanted
+                }
+                self.tick()
+            }
         }
     }
 
     func choose(_ new: Lens) {
         guard state == .ready, new != lens else { return }
         state = .starting
+        torchWanted = .off
         camera.start(lens: new) { [weak self] result in
             Task { @MainActor in
                 guard let self else { return }
@@ -362,6 +449,23 @@ final class PhoneModel: ObservableObject {
         }
     }
 
+    /// The only thing that removes a take from the phone, and only when it was deleted on the Mac.
+    /// A take still being written is left alone; the Mac asks again once it has stopped.
+    private func deleteTake(_ id: String) {
+        guard recorder?.current.takeID != id else { return }
+        do {
+            try TakeRemoval.remove(id, from: takes)
+        } catch {
+            problem = "Could not delete a take: \(error.localizedDescription)"
+            return
+        }
+        sent[id] = nil
+        if sending?.takeID == id { sending = nil }
+        space = nil
+        link.send(.takeDeleted(takeID: id))
+        tick()
+    }
+
     // MARK: - The lens
 
     private func lensCleared() {
@@ -438,6 +542,13 @@ final class PhoneModel: ObservableObject {
         if state == .recording, free < Self.spaceToStop { stopTake(reason: "The iPhone ran out of space") }
         if state == .recording, heat == .critical { stopTake(reason: "The iPhone got too hot") }
 
+        let torch = camera.torch
+        // iOS put the light out by itself. Say so, because the picture just got darker.
+        if torchWanted != .off, torch == .off, state == .ready || state == .recording {
+            torchWanted = .off
+            problem = "The iPhone turned its light off to cool down"
+        }
+
         let status = PhoneStatus(
             name: device.name, model: "iPhone", state: state, note: problem, takeID: current?.takeID, seconds: seconds,
             lens: lens, freeBytes: free, bytesPerSecond: (CameraController.bitrate + 96_000) / 8, battery: battery,
@@ -445,7 +556,7 @@ final class PhoneModel: ObservableObject {
             iso: camera.exposure?.iso, shutterSeconds: camera.exposure?.seconds, lensWiped: lensWiped,
             screenMirrored: screenMirrored, fileMirrored: camera.fileMirrored,
             processor: load.wholePhone(), appProcessor: load.thisApp(), cameraStrain: camera.strain,
-            cameraFPS: camera.framesPerSecond)
+            cameraFPS: camera.framesPerSecond, torch: torch)
         warnings = status.warnings
         link.send(.status(status))
     }

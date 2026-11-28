@@ -36,20 +36,34 @@ Editing inside the app is not built yet.
 
 Takes are saved in `~/Movies/Clapless/<date_time>/`: `camera.mov`, `screen.mp4`, `mic.m4a`,
 `take.json`. The screen and mic files begin at the same moment; the camera is matched to them
-by sound. The iPhone keeps its own copy of every take.
+by sound. The iPhone keeps its own copy of every take until you delete the take: the bin button in
+the Takes list removes it from the Mac (at once, or by way of the Trash) and from the iPhone, the
+next time it connects if it is away.
 
 Record only people who have agreed to it, and check what is on your screen before you share
 a take.
 
 ## Command line
 
-`scripts/clapless status | start | stop | takes | mic NAME|default | lens back|front | speedtest [MB] | direct on|off | screen on|off|full|app NAME | apps | sync [TAKE]`
+`scripts/clapless status | start | stop | takes | mic NAME|default | lens back|front | light off|low|medium|high | disconnect | connect | speedtest [MB] | direct on|off | screen on|off|full|app NAME | apps | sync [TAKE]`
+
+## Light
+
+**Light** in the Mac window turns on the iPhone's flashlight (back camera only), at low, medium or
+high. Set it before a take: it is locked while recording. It goes out when the Mac disconnects or
+you switch cameras. It warms the phone, and iOS may turn it off if the phone gets hot.
 
 ## Heat
 
 Between takes the iPhone's camera runs at 15 frames a second (takes are 30). With a Mac
 connected the phone's screen goes black after 20 seconds; tap it to see the picture. After
-three minutes with no Mac and no touch the camera switches off and the phone may lock as usual.
+three minutes with no Mac and no touch the camera switches off, and after five Clapless closes itself.
+
+**Disconnect** in the Mac window stops the iPhone's camera and light at once and closes Clapless on
+the phone 90 seconds later (tap the phone to keep it open). A take still being sent is let through
+first. A take being recorded is never cut off. To film again, open Clapless on the phone and press
+**Connect**. Closing ends the app's process, which suits a personal app but not the App Store.
+
 Each `take.json` notes how warm the iPhone got.
 
 ## Limits

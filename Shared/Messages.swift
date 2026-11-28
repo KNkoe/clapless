@@ -11,6 +11,32 @@ enum Lens: String, Codable, Equatable {
     case back, front
 }
 
+/// The iPhone's flashlight, used as a lamp. It exists only on the back of the phone.
+enum Torch: String, Codable, Equatable, CaseIterable {
+    case off, low, medium, high
+
+    var level: Float {
+        switch self {
+        case .off: return 0
+        case .low: return 0.1
+        case .medium: return 0.4
+        case .high: return 1
+        }
+    }
+
+    /// Off to the last brightness used, and back.
+    func toggled(lastUsed: Torch) -> Torch { self != .off ? .off : lastUsed == .off ? .low : lastUsed }
+
+    /// Low, medium, high, and round again. Never off: that is its own button.
+    var nextBrightness: Torch {
+        switch self {
+        case .low: return .medium
+        case .medium: return .high
+        case .high, .off: return .low
+        }
+    }
+}
+
 enum CaptureState: String, Codable, Equatable {
     case starting, ready, recording, finishing, unavailable
 }
@@ -92,6 +118,7 @@ struct PhoneStatus: Codable, Equatable {
     var appProcessor: Double?     // Clapless's own use, as a percentage of one core
     var cameraStrain: String?     // iOS's warning that the camera system is under pressure
     var cameraFPS: Int?           // frames a second the camera is running at
+    var torch: Torch?             // what the light is really doing; nil when this lens has none
 
     var minutesLeft: Double { bytesPerSecond > 0 ? Double(freeBytes) / Double(bytesPerSecond) / 60 : 0 }
 }
@@ -101,12 +128,15 @@ enum MacMessage: Codable, Equatable {
     case startTake(takeID: String)
     case stopTake
     case setLens(Lens)
+    case setTorch(Torch)
     case ping(id: Int, sent: Double)
     case listTakes
     case fetch(takeID: String, index: Int)
     case takeVerified(takeID: String, sha256: String)
+    case deleteTake(takeID: String)     // deleted on the Mac: remove the phone's copy too
     case speedTest(bytes: Int)
     case previewShown                   // one preview picture arrived: the phone may send another
+    case disconnect                     // Disconnect was pressed: stop everything and close shortly
 }
 
 enum PhoneMessage: Codable, Equatable {
@@ -114,6 +144,7 @@ enum PhoneMessage: Codable, Equatable {
     case status(PhoneStatus)
     case manifest(TakeManifest)        // sent for every new segment and again when complete
     case takes([TakeManifest])
+    case takeDeleted(takeID: String)    // the phone holds nothing under that name any more
     case pong(id: Int, sent: Double, received: Double, replied: Double)
     case refused(String)
     case level(Double)                  // peak of the phone's scratch sound in dB, a few times a second

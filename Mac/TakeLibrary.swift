@@ -5,6 +5,7 @@ final class TakeLibrary: @unchecked Sendable {
     let root: URL
     private let lock = NSLock()
     private var records: [String: TakeRecord] = [:]
+    private var deleted: DeletedTakes { DeletedTakes(file: root.appendingPathComponent(".deleted.json")) }
 
     /// Called on the main queue with every take, newest first.
     var onChange: (([TakeRecord]) -> Void)?
@@ -66,6 +67,30 @@ final class TakeLibrary: @unchecked Sendable {
             records[take] = record
             do { try write(record) } catch { NSLog("Clapless: could not save take.json for \(take): \(error)") }
         }
+        publish()
+    }
+
+    /// Remove the take's folder from this Mac and remember that the iPhone's copy has to go too.
+    func delete(_ take: String, toTrash: Bool) throws {
+        try lock.withLock {
+            try TakeRemoval.remove(take, from: root, toTrash: toTrash)
+            records[take] = nil
+            do { try deleted.add(take) } catch {
+                NSLog("Clapless: the iPhone copy of \(take) will stay: \(error)")
+            }
+        }
+        publish()
+    }
+
+    /// Deleted takes the iPhone has not confirmed. One put back from the Trash is no longer wanted gone.
+    func awaitingPhoneDelete() -> [String] {
+        lock.withLock {
+            deleted.all().filter { !FileManager.default.fileExists(atPath: folder($0).path) }.sorted()
+        }
+    }
+
+    func phoneDeleted(_ take: String) {
+        lock.withLock { try? deleted.remove(take) }
         publish()
     }
 
